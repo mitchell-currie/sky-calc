@@ -1151,6 +1151,9 @@ function animatePointerToCity(targetLat, targetLon, duration = 500) {
         focusPointLat = startLat + (targetLat - startLat) * eased;
         focusPointLon = startLon + (targetLon - startLon) * eased;
 
+        // In horizon mode, camera follows pointer regardless of pin mode
+        syncCameraToFocusInHorizonMode();
+
         // Reset momentum
         focusVelocityLat = 0;
         focusVelocityLon = 0;
@@ -1280,9 +1283,9 @@ function getSimulatedTime() {
  * Returns { yaw, pitch } in radians
  */
 function getHorizonEntryTarget() {
-    // Free mode - keep current direction, look at horizon
+    // Free mode - face north, look at horizon
     if (zoomTargetMode === 2) {
-        return { yaw: horizonYaw, pitch: 0 };
+        return { yaw: 0, pitch: 0 };
     }
 
     const simTime = getAbsoluteSimulatedTime();
@@ -4838,6 +4841,8 @@ const HORIZON_CAMERA_HEIGHT = EARTH_RADIUS + 16;  // Fixed height when in horizo
 let isHorizonMode = false;           // Current mode: false = orbital, true = horizon
 let horizonBlendValue = 0;           // Animated blend value (0 = orbital, 1 = horizon)
 const VIEW_SNAP_SPEED = 8;           // Speed of snap transition
+let horizonZoomAccumulator = 0;      // Accumulated zoom input in horizon mode
+const HORIZON_DEAD_ZONE = 8;         // Number of scroll events before FOV zoom starts
 
 // Drag state
 let isDragging = false;        // Left-click: move focus point
@@ -4869,7 +4874,7 @@ const HORIZON_ANIMATION_THRESHOLD = 0.8;  // Start animation when blend reaches 
 let targetYaw = 0, targetPitch = 0;
 let animationStartYaw = 0, animationStartPitch = 0;
 let animationProgress = 0;
-const CELESTIAL_ANIMATION_SPEED = 2;  // Speed of animation (per second)
+const CELESTIAL_ANIMATION_SPEED = 4;  // Speed of animation (per second)
 
 // Snap-back state
 let isSnappingBack = false;
@@ -5218,7 +5223,7 @@ function createEarth() {
 
     // Load day texture
     const loader = new THREE.TextureLoader();
-    loader.load('./natural-earth-no-ice-clouds.jpeg', (texture) => {
+    loader.load('natural-earth-no-ice-clouds.jpeg', (texture) => {
         earthMaterial.map = texture;
         earthMaterial.color = new THREE.Color(0xBDCCDB); // Green tint
         earthMaterial.needsUpdate = true;
@@ -5228,7 +5233,7 @@ function createEarth() {
     });
 
     // Load elevation/displacement map
-    loader.load('./earth-elevation.jpg', (texture) => {
+    loader.load('earth-elevation.jpg', (texture) => {
         earthMaterial.displacementMap = texture;
         earthMaterial.displacementScale = 5;  // Exaggerated for visibility (real would be ~8 units)
         earthMaterial.needsUpdate = true;
@@ -5721,6 +5726,32 @@ function updateCompassTargetState() {
     }
     if (compassMoon) {
         compassMoon.classList.toggle('locked', zoomTargetMode === 1);
+    }
+
+    // If in horizon mode and locking to sun/moon, animate to target
+    if (horizonBlendValue > 0.5 && zoomTargetMode !== 2) {
+        startHorizonTargetAnimation();
+    }
+}
+
+function startHorizonTargetAnimation() {
+    const target = getHorizonEntryTarget();
+    animationStartYaw = horizonYaw;
+    animationStartPitch = horizonPitch;
+    targetYaw = target.yaw;
+    targetPitch = target.pitch;
+    animationProgress = 0;
+    isAnimatingToTarget = true;
+}
+
+/**
+ * Sync camera position to focus point when in horizon mode
+ * In horizon mode, both pin modes should behave the same - camera follows pointer
+ */
+function syncCameraToFocusInHorizonMode() {
+    if (horizonBlendValue > 0.5) {
+        cameraRefLat = focusPointLat - dragOffsetLat;
+        cameraRefLon = focusPointLon - dragOffsetLon;
     }
 }
 
@@ -6483,7 +6514,10 @@ function updateLabelScales() {
                 const maxHorizonScale = 0.00015;
                 const horizonScale = distToCameraLabel * (minHorizonScale + proximityFactor * (maxHorizonScale - minHorizonScale));
                 const scaleMultiplier = orbitalScale * (1 - horizonFactor) + horizonScale * horizonFactor;
-                labelSprite.scale.set(baseScale.x * scaleMultiplier, baseScale.y * scaleMultiplier, 1);
+                // Cap maximum label size in horizon view to prevent huge nearby labels
+                const maxLabelScale = inHorizonView ? 0.4 : 2;
+                const clampedScale = Math.min(scaleMultiplier, maxLabelScale);
+                labelSprite.scale.set(baseScale.x * clampedScale, baseScale.y * clampedScale, 1);
 
                 // Update signpost pole connecting marker to label
                 const signpostPole = marker.userData.signpostPole;
@@ -6613,7 +6647,7 @@ function updateSystemTime() {
                     offsetStr = days === 0 ? `${sign}${years}y` : `${sign}${years}y ${days}d`;
                 }
 
-                liveOffsetEl.textContent = `(${offsetStr} from present)`;
+                liveOffsetEl.innerHTML = `(${offsetStr}<span class="from-present"> from present</span>)`;
             }
         }
     }
@@ -6836,8 +6870,10 @@ function updateCompass() {
     // Show/hide based on horizon mode
     if (horizonBlendValue > 0.5) {
         compass.classList.add('visible');
+        document.body.classList.add('horizon-mode');
     } else {
         compass.classList.remove('visible');
+        document.body.classList.remove('horizon-mode');
         return;
     }
 
@@ -6959,15 +6995,25 @@ function updateViewMode(delta) {
 
     if (shouldBeHorizon !== isHorizonMode) {
         isHorizonMode = shouldBeHorizon;
-        // When entering horizon mode, look at horizon in target direction (no pitch up yet)
+        // When entering horizon mode, look at horizon in target direction
         if (isHorizonMode) {
             const target = getHorizonEntryTarget();
-            // Start at horizon level facing target direction
-            horizonYaw = target.yaw;
-            horizonPitch = 0;
+            if (zoomTargetMode === 2) {
+                // Free mode - snap to north
+                horizonYaw = target.yaw;
+                horizonPitch = 0;
+            } else {
+                // Locked to sun/moon - start facing north, then animate to target
+                horizonYaw = 0;
+                horizonPitch = 0;
+                // Queue animation to start after blend settles
+                pendingHorizonAnimation = true;
+                pendingTargetYaw = target.yaw;
+                pendingTargetPitch = target.pitch;
+            }
         }
-        // Cancel any pending animation if mode changes
-        pendingHorizonAnimation = false;
+        // Cancel any pending animation if leaving horizon mode
+        if (!isHorizonMode) pendingHorizonAnimation = false;
         // Update button to reflect manual zoom change
         isZoomedOut = !shouldBeHorizon;
         updateViewZoomButton();
@@ -7208,13 +7254,15 @@ function setupOrbitControls() {
 
             if (horizonBlend > 0.5) {
                 // Horizon view mode - rotate view direction (yaw/pitch)
-                // Only allow drag in free mode (zoomTargetMode === 2)
-                if (zoomTargetMode === 2) {
-                    const sensitivity = 0.003;
-                    horizonYaw += deltaX * sensitivity;
-                    horizonPitch -= deltaY * sensitivity;
-                    horizonPitch = THREE.MathUtils.clamp(horizonPitch, -Math.PI / 2 + 0.1, Math.PI / 2 - 0.1);
+                // Dragging unlocks from sun/moon tracking
+                if (zoomTargetMode !== 2) {
+                    zoomTargetMode = 2;
+                    updateCompassTargetState();
                 }
+                const sensitivity = 0.003;
+                horizonYaw += deltaX * sensitivity;
+                horizonPitch -= deltaY * sensitivity;
+                horizonPitch = THREE.MathUtils.clamp(horizonPitch, -Math.PI / 2 + 0.1, Math.PI / 2 - 0.1);
                 dragStartX = e.clientX;
                 dragStartY = e.clientY;
             } else {
@@ -7359,22 +7407,30 @@ function setupOrbitControls() {
         if (wasAtMin && wasInHorizonMode) {
             const fovSpeed = 3;
             if (zoomingIn) {
-                // Zoom in - decrease FOV and trigger look-up animation
-                const prevFov = camera.fov;
-                camera.fov = Math.max(MIN_FOV, camera.fov - fovSpeed);
+                // Dead zone - accumulate zoom input before starting FOV zoom
+                if (horizonZoomAccumulator < HORIZON_DEAD_ZONE) {
+                    horizonZoomAccumulator++;
+                } else {
+                    // Zoom in - decrease FOV and trigger look-up animation
+                    const prevFov = camera.fov;
+                    camera.fov = Math.max(MIN_FOV, camera.fov - fovSpeed);
 
-                // Start looking up at sun/moon when zooming in past horizon
-                if (prevFov >= DEFAULT_FOV - 1 && !isAnimatingToTarget) {
-                    const target = getHorizonEntryTarget();
-                    pendingHorizonAnimation = true;
-                    pendingTargetYaw = target.yaw;
-                    pendingTargetPitch = target.pitch;
+                    // Start looking up at sun/moon when zooming in past horizon (only if locked)
+                    if (prevFov >= DEFAULT_FOV - 1 && !isAnimatingToTarget && zoomTargetMode !== 2) {
+                        const target = getHorizonEntryTarget();
+                        pendingHorizonAnimation = true;
+                        pendingTargetYaw = target.yaw;
+                        pendingTargetPitch = target.pitch;
+                    }
                 }
             } else {
-                // Zoom out - increase FOV first, then exit horizon mode
-                camera.fov = Math.min(DEFAULT_FOV, camera.fov + fovSpeed);
-                if (camera.fov >= DEFAULT_FOV) {
-                    // FOV is back to default, now allow radius to increase
+                // Zoom out - decrease accumulator first, then FOV, then exit
+                if (horizonZoomAccumulator > 0 && camera.fov >= DEFAULT_FOV) {
+                    horizonZoomAccumulator--;
+                } else if (camera.fov < DEFAULT_FOV) {
+                    camera.fov = Math.min(DEFAULT_FOV, camera.fov + fovSpeed);
+                } else {
+                    // FOV is back to default and accumulator is 0, now allow radius to increase
                     cameraRadius += zoomSpeed;
                 }
             }
@@ -7400,6 +7456,9 @@ function setupOrbitControls() {
         // Check if we just entered horizon mode
         const nowInHorizonMode = cameraRadius < HORIZON_THRESHOLD;
         if (nowInHorizonMode && !wasInHorizonMode && zoomingIn) {
+            // Reset dead zone accumulator
+            horizonZoomAccumulator = 0;
+
             // Failsafe: snap camera to be centered on pointer
             if (focusLocked) {
                 cameraRefLat = focusPointLat - dragOffsetLat;
@@ -7498,6 +7557,9 @@ function setupOrbitControls() {
 
         focusPointLat = hitLat;
         focusPointLon = hitLon;
+
+        // In horizon mode, camera follows pointer regardless of pin mode
+        syncCameraToFocusInHorizonMode();
 
         // Update timezone tracking
         updateSliderForTimezone();
@@ -7619,13 +7681,15 @@ function setupOrbitControls() {
 
             if (horizonBlend > 0.5) {
                 // Horizon view mode - rotate view direction
-                // Only allow drag in free mode (zoomTargetMode === 2)
-                if (zoomTargetMode === 2) {
-                    const sensitivity = 0.003;
-                    horizonYaw += deltaX * sensitivity;
-                    horizonPitch -= deltaY * sensitivity;
-                    horizonPitch = THREE.MathUtils.clamp(horizonPitch, -Math.PI / 2 + 0.1, Math.PI / 2 - 0.1);
+                // Dragging unlocks from sun/moon tracking
+                if (zoomTargetMode !== 2) {
+                    zoomTargetMode = 2;
+                    updateCompassTargetState();
                 }
+                const sensitivity = 0.003;
+                horizonYaw += deltaX * sensitivity;
+                horizonPitch -= deltaY * sensitivity;
+                horizonPitch = THREE.MathUtils.clamp(horizonPitch, -Math.PI / 2 + 0.1, Math.PI / 2 - 0.1);
                 touchStartX = e.touches[0].clientX;
                 touchStartY = e.touches[0].clientY;
             } else {
@@ -7655,19 +7719,28 @@ function setupOrbitControls() {
                 if (wasAtMin && wasInHorizonMode) {
                     const fovSpeed = Math.abs(delta) * 0.1;
                     if (zoomingIn) {
-                        const prevFov = camera.fov;
-                        camera.fov = Math.max(MIN_FOV, camera.fov - fovSpeed);
+                        // Dead zone - accumulate zoom input before starting FOV zoom
+                        if (horizonZoomAccumulator < HORIZON_DEAD_ZONE) {
+                            horizonZoomAccumulator += 0.5;  // Touch pinch accumulates slower
+                        } else {
+                            const prevFov = camera.fov;
+                            camera.fov = Math.max(MIN_FOV, camera.fov - fovSpeed);
 
-                        // Start looking up at sun/moon when zooming in past horizon
-                        if (prevFov >= DEFAULT_FOV - 1 && !isAnimatingToTarget) {
-                            const target = getHorizonEntryTarget();
-                            pendingHorizonAnimation = true;
-                            pendingTargetYaw = target.yaw;
-                            pendingTargetPitch = target.pitch;
+                            // Start looking up at sun/moon when zooming in past horizon (only if locked)
+                            if (prevFov >= DEFAULT_FOV - 1 && !isAnimatingToTarget && zoomTargetMode !== 2) {
+                                const target = getHorizonEntryTarget();
+                                pendingHorizonAnimation = true;
+                                pendingTargetYaw = target.yaw;
+                                pendingTargetPitch = target.pitch;
+                            }
                         }
                     } else {
-                        camera.fov = Math.min(DEFAULT_FOV, camera.fov + fovSpeed);
-                        if (camera.fov >= DEFAULT_FOV) {
+                        // Zoom out - decrease accumulator first, then FOV, then exit
+                        if (horizonZoomAccumulator > 0 && camera.fov >= DEFAULT_FOV) {
+                            horizonZoomAccumulator -= 0.5;
+                        } else if (camera.fov < DEFAULT_FOV) {
+                            camera.fov = Math.min(DEFAULT_FOV, camera.fov + fovSpeed);
+                        } else {
                             cameraRadius += Math.abs(delta);
                         }
                     }
@@ -7693,6 +7766,9 @@ function setupOrbitControls() {
                 // Check if we just entered horizon mode
                 const nowInHorizonMode = cameraRadius < HORIZON_THRESHOLD;
                 if (nowInHorizonMode && !wasInHorizonMode && zoomingIn) {
+                    // Reset dead zone accumulator
+                    horizonZoomAccumulator = 0;
+
                     // Failsafe: snap camera to be centered on pointer
                     if (focusLocked) {
                         cameraRefLat = focusPointLat - dragOffsetLat;
@@ -7733,6 +7809,9 @@ function setupOrbitControls() {
             // Wrap longitude
             while (focusPointLon > 180) focusPointLon -= 360;
             while (focusPointLon < -180) focusPointLon += 360;
+
+            // In horizon mode, camera follows pointer regardless of pin mode
+            syncCameraToFocusInHorizonMode();
 
             // Update timezone tracking
             updateSliderForTimezone();
@@ -7970,6 +8049,9 @@ function animate() {
         // Wrap longitude
         while (focusPointLon > 180) focusPointLon -= 360;
         while (focusPointLon < -180) focusPointLon += 360;
+
+        // In horizon mode, camera follows pointer regardless of pin mode
+        syncCameraToFocusInHorizonMode();
 
         // Apply friction
         focusVelocityLat *= FOCUS_FRICTION;

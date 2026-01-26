@@ -281,7 +281,7 @@ canvas {
 
 #compass {
     position: fixed;
-    top: 20px;
+    top: 0;
     left: 50%;
     transform: translateX(-50%);
     font-size: 18px;
@@ -292,7 +292,7 @@ canvas {
     z-index: 100;
     overflow: hidden;
     width: 350px;
-    height: 30px;
+    height: 50px;
     pointer-events: none;
 }
 
@@ -359,6 +359,7 @@ canvas {
     will-change: transform;
     cursor: pointer;
     z-index: 10;
+    overflow: visible;
 }
 
 .compass-celestial:hover {
@@ -376,9 +377,16 @@ canvas {
 .compass-celestial.locked::after {
     content: '🔒';
     position: absolute;
-    font-size: 8px;
-    top: -2px;
-    right: -6px;
+    font-size: 12px;
+    top: 0px;
+    right: -14px;
+    animation: lock-pulse 1.5s ease-in-out infinite;
+    filter: drop-shadow(0 0 6px #fff) drop-shadow(0 0 3px #0ff);
+}
+
+@keyframes lock-pulse {
+    0%, 100% { transform: scale(1); filter: drop-shadow(0 0 6px #fff) drop-shadow(0 0 3px #0ff); }
+    50% { transform: scale(1.15); filter: drop-shadow(0 0 10px #fff) drop-shadow(0 0 6px #0ff); }
 }
 
 .compass-celestial.locked.below-horizon {
@@ -2807,7 +2815,6 @@ canvas {
     .location-time-wrapper {
         width: 100%;
         flex: 1 1 100%;
-        order: 2;
     }
 
     .location-time-container {
@@ -2833,14 +2840,22 @@ canvas {
     }
 
     .celestial-container {
-        flex: 1 1 100%;
-        width: 100%;
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        right: 8px;
+        width: auto;
         justify-content: space-between;
         background: transparent;
         border: none;
         padding: 0;
         gap: 0;
-        order: 1;
+        z-index: 100;
+        transition: top 0.3s ease;
+    }
+
+    body.horizon-mode .celestial-container {
+        top: 30px;
     }
 
     .celestial-container .celestial-divider {
@@ -2895,6 +2910,10 @@ canvas {
 
     .eclipse-btn {
         flex-shrink: 0;
+    }
+
+    .from-present {
+        display: none;
     }
 }
 
@@ -2962,7 +2981,7 @@ canvas {
 #right-controls {
     position: fixed;
     right: 10px;
-    top: min(50%, calc(100vh - 360px));
+    top: clamp(100px, 50%, calc(100vh - 240px));
     transform: translateY(-50%);
     z-index: 100;
 }
