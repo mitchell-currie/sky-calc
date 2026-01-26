@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Where is Moon?</title>
+    <link rel="stylesheet" href="style.css?v=241">
+</head>
+<body>
+    <div id="container"></div>
+
+    <div id="left-controls">
+        <button id="toggle-focus-lock" title="Toggle pin mode"></button>
+        <button id="toggle-city-labels" title="Toggle city labels" class="active">🏷️</button>
+        <button id="toggle-city-spheres" title="Toggle city spheres" class="active">💡</button>
+        <button id="toggle-earth-settings" title="Appearance">🌐</button>
+    </div>
+
+    <div id="right-controls">
+        <div id="zoom-slider-container">
+            <div class="zoom-label">🔭</div>
+            <input type="range" id="zoom-slider" min="0" max="100" value="0" step="1" orient="vertical">
+            <div class="zoom-label zoom-label-middle">🌅</div>
+            <div class="zoom-label">🌍</div>
+        </div>
+    </div>
+
+    <div id="earth-settings-panel" class="hidden">
+        <div class="panel-header">
+            <span>Apperance</span>
+            <button id="close-earth-settings">×</button>
+        </div>
+        <div class="panel-row">
+            <span>Sun Light</span>
+            <input type="color" id="sun-light-color" value="#ffffff">
+        </div>
+        <div class="panel-row">
+            <span>Day Cities</span>
+            <input type="color" id="sun-beam-color" value="#ffdd44">
+        </div>
+        <div class="panel-row">
+            <span>Night Cities</span>
+            <input type="color" id="moon-beam-color" value="#8899ff">
+        </div>
+    </div>
+
+    <div id="position-display">
+        <div class="info-row">
+            <div class="celestial-container">
+                <div class="celestial-body sun-section">
+                    <div class="body-visual">
+                        <div class="sun-icon" id="sun-icon">
+                            <div class="sun-core"></div>
+                            <div class="sun-rays"></div>
+                        </div>
+                        <span class="body-label">SUN</span>
+                    </div>
+                    <div class="body-info">
+                        <div class="bearing-readout">
+                            <div class="bearing-row">
+                                <span class="bearing-label">BRG</span>
+                                <span class="bearing-value" id="sun-azimuth">---°</span>
+                            </div>
+                            <div class="bearing-row">
+                                <span class="bearing-label">ALT</span>
+                                <span class="bearing-value" id="sun-altitude-value">--°</span>
+                            </div>
+                        </div>
+                        <div class="info-secondary">
+                            <span class="daylight-info" id="sun-daylight-info">--</span>
+                            <span class="next-event-info" id="sun-next-event">--</span>
+                            <span class="distance-info" id="sun-distance">-- M km</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="celestial-divider"></div>
+                <div class="celestial-body moon-section">
+                    <div class="body-visual">
+                        <div class="moon-icon" id="moon-icon">
+                            <div class="moon-sphere"></div>
+                            <div class="moon-shadow"></div>
+                        </div>
+                        <span class="body-label">MOON</span>
+                        <span class="illum-value" id="moon-illumination">--%</span>
+                    </div>
+                    <div class="body-info">
+                        <div class="bearing-readout">
+                            <div class="bearing-row">
+                                <span class="bearing-label">BRG</span>
+                                <span class="bearing-value" id="moon-azimuth">---°</span>
+                            </div>
+                            <div class="bearing-row">
+                                <span class="bearing-label">ALT</span>
+                                <span class="bearing-value" id="moon-altitude-value">--°</span>
+                            </div>
+                        </div>
+                        <div class="info-secondary">
+                            <span class="phase-name" id="moon-phase-name">--</span>
+                            <span class="next-event-info moon" id="moon-next-event">--</span>
+                            <div class="info-extra">
+                                <span class="moon-age" id="moon-age">--d</span>
+                                <span class="moon-distance" id="moon-distance">-- k km</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="location-time-wrapper">
+                <div class="location-time-container">
+                    <div class="location-time-top">
+                        <div id="city-carousel">
+                            <input type="text" id="city-search" class="city-search-bubble" placeholder="🔍">
+                            <div class="carousel-scroll"></div>
+                        </div>
+                    </div>
+                    <div class="location-time-bottom">
+                        <div class="location-coords">
+                            <span id="city-utc-offset" class="odo-utc">UTC+0</span>
+                            <div class="coord"><span class="label">LAT</span><span id="lat-value">0.00°</span></div>
+                            <div class="coord"><span class="label">LON</span><span id="lon-value">0.00°</span></div>
+                        </div>
+                        <div class="datetime-odometer">
+                            <div class="time-section">
+                                <div class="scroll-wheel" data-target="hour" id="wheel-hour">
+                                    <div class="wheel-viewport">
+                                        <div class="wheel-track">
+                                            <span class="wheel-item" data-offset="-1"></span>
+                                            <span class="wheel-item current" data-offset="0"></span>
+                                            <span class="wheel-item" data-offset="1"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <span class="odo-sep">:</span>
+                                <div class="scroll-wheel" data-target="minute" id="wheel-minute">
+                                    <div class="wheel-viewport">
+                                        <div class="wheel-track">
+                                            <span class="wheel-item" data-offset="-1"></span>
+                                            <span class="wheel-item current" data-offset="0"></span>
+                                            <span class="wheel-item" data-offset="1"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="scroll-wheel ampm" data-target="ampm" id="wheel-ampm">
+                                    <div class="wheel-viewport">
+                                        <div class="wheel-track">
+                                            <span class="wheel-item" data-offset="-1"></span>
+                                            <span class="wheel-item current" data-offset="0"></span>
+                                            <span class="wheel-item" data-offset="1"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="date-section">
+                                <div class="scroll-wheel" data-target="month" id="wheel-month">
+                                    <div class="wheel-viewport">
+                                        <div class="wheel-track">
+                                            <span class="wheel-item" data-offset="-1"></span>
+                                            <span class="wheel-item current" data-offset="0"></span>
+                                            <span class="wheel-item" data-offset="1"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="scroll-wheel" data-target="day" id="wheel-day">
+                                    <div class="wheel-viewport">
+                                        <div class="wheel-track">
+                                            <span class="wheel-item" data-offset="-1"></span>
+                                            <span class="wheel-item current" data-offset="0"></span>
+                                            <span class="wheel-item" data-offset="1"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="scroll-wheel" data-target="year" id="wheel-year">
+                                    <div class="wheel-viewport">
+                                        <div class="wheel-track">
+                                            <span class="wheel-item" data-offset="-1"></span>
+                                            <span class="wheel-item current" data-offset="0"></span>
+                                            <span class="wheel-item" data-offset="1"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button id="calendar-btn" class="eclipse-btn" title="Eclipses"><span>E</span><span>C</span><span>L</span><span>I</span><span>P</span><span>S</span><span>E</span></button>
+            </div>
+        </div>
+        <div class="timeline-section">
+            <div class="slider-row">
+                <div class="slider-container">
+                    <div class="time-ticks">
+                        <div class="tick label" style="left: 0%"><span>12a</span></div>
+                        <div class="tick" style="left: 4.167%"></div>
+                        <div class="tick" style="left: 8.333%"></div>
+                        <div class="tick label" style="left: 12.5%"><span>3a</span></div>
+                        <div class="tick" style="left: 16.667%"></div>
+                        <div class="tick" style="left: 20.833%"></div>
+                        <div class="tick label" style="left: 25%"><span>6a</span></div>
+                        <div class="tick" style="left: 29.167%"></div>
+                        <div class="tick" style="left: 33.333%"></div>
+                        <div class="tick label" style="left: 37.5%"><span>9a</span></div>
+                        <div class="tick" style="left: 41.667%"></div>
+                        <div class="tick" style="left: 45.833%"></div>
+                        <div class="tick label noon" style="left: 50%"><span>12p</span></div>
+                        <div class="tick" style="left: 54.167%"></div>
+                        <div class="tick" style="left: 58.333%"></div>
+                        <div class="tick label" style="left: 62.5%"><span>3p</span></div>
+                        <div class="tick" style="left: 66.667%"></div>
+                        <div class="tick" style="left: 70.833%"></div>
+                        <div class="tick label" style="left: 75%"><span>6p</span></div>
+                        <div class="tick" style="left: 79.167%"></div>
+                        <div class="tick" style="left: 83.333%"></div>
+                        <div class="tick label" style="left: 87.5%"><span>9p</span></div>
+                        <div class="tick" style="left: 91.667%"></div>
+                        <div class="tick" style="left: 95.833%"></div>
+                        <div class="tick label" style="left: 100%"><span>12a</span></div>
+                    </div>
+                    <div id="slider-markers">
+                        <div id="sun-visibility-bar" class="visibility-bar sun-bar"></div>
+                        <div id="sun-visibility-bar-2" class="visibility-bar sun-bar"></div>
+                        <div id="moon-visibility-bar" class="visibility-bar moon-bar"></div>
+                        <div id="moon-visibility-bar-2" class="visibility-bar moon-bar"></div>
+                        <div id="now-marker" class="event-marker now"></div>
+                        <div id="sunrise-marker" class="event-marker sunrise"></div>
+                        <div id="sunset-marker" class="event-marker sunset"></div>
+                        <div id="moonrise-marker" class="event-marker moonrise"></div>
+                        <div id="moonset-marker" class="event-marker moonset"></div>
+                        <div id="noon-marker" class="noon-marker"></div>
+                        <div class="day-boundary-marker left"></div>
+                        <div class="day-boundary-marker right"></div>
+                    </div>
+                    <input type="range" id="time-slider" min="0" max="1440" value="720" step="1">
+                </div>
+            </div>
+            <div class="playback-controls">
+                <div class="left-controls">
+                    <button id="play-pause-btn" class="play-pause-toggle" title="Play/Pause">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" class="play-icon">
+                            <path d="M8 5v14l11-7z"/>
+                        </svg>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" class="pause-icon">
+                            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/>
+                        </svg>
+                    </button>
+                    <button id="direction-toggle-btn" class="direction-toggle" title="Toggle direction">
+                        <span class="forward-text">FORWARD</span>
+                        <span class="reverse-text">REVERSE</span>
+                    </button>
+                    <button id="speed-decrease-btn" title="Slower">−</button>
+                    <span id="speed-display">1m/m</span>
+                    <button id="speed-increase-btn" title="Faster">+</button>
+                </div>
+                <div class="center-controls">
+                    <div class="system-time-row">
+                        <span id="system-date-display">----−--−--</span>
+                        <span id="system-time-display">--:--:--</span>
+                        <span id="user-utc-offset" class="utc-label">UTC</span>
+                        <span id="live-offset" class="live-offset"></span>
+                    </div>
+                </div>
+                <div class="right-controls">
+                    <span id="live-btn-wrapper" title="Reset to live"><button id="live-btn" class="now-btn">RESET</button></span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="celestial-top-display"></div>
+
+    <button id="ui-visibility-toggle" class="ui-toggle-btn" title="Toggle UI visibility">
+        <svg class="eye-open" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+        </svg>
+        <svg class="eye-closed" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+            <line x1="1" y1="1" x2="23" y2="23"/>
+        </svg>
+    </button>
+
+    <div id="compass">
+        <div class="compass-track">
+            <span class="dir" data-angle="270">W</span>
+            <span class="dir" data-angle="315">NW</span>
+            <span class="dir north" data-angle="0">N</span>
+            <span class="dir" data-angle="45">NE</span>
+            <span class="dir" data-angle="90">E</span>
+            <span class="dir" data-angle="135">SE</span>
+            <span class="dir" data-angle="180">S</span>
+            <span class="dir" data-angle="225">SW</span>
+            <span class="dir" data-angle="270">W</span>
+            <span class="dir" data-angle="315">NW</span>
+            <span class="dir north" data-angle="0">N</span>
+            <span class="dir" data-angle="45">NE</span>
+            <span class="dir" data-angle="90">E</span>
+        </div>
+        <div class="compass-indicator"></div>
+        <div class="compass-degrees" id="compass-degrees">0°</div>
+        <div class="compass-celestial" id="compass-sun">☀️</div>
+        <div class="compass-celestial" id="compass-moon">🌙</div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script type="module" src="main.js?v=293"></script>
+</body>
+</html>

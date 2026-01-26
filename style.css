@@ -1,0 +1,3091 @@
+:root {
+    --sun-city-color: #ffdd44;
+    --moon-city-color: #8899ff;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    overflow: hidden;
+    background: #000;
+    color: #e0e0e0;
+}
+
+#container {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+}
+
+canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* Left side controls - Toolbox style */
+#left-controls {
+    position: fixed;
+    left: 10px;
+    top: min(50%, calc(100vh - 340px));
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    z-index: 100;
+    background: rgba(0, 0, 0, 0.7);
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+#left-controls button {
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    margin-bottom: 4px;
+    font-size: 14px;
+    filter: grayscale(1) opacity(0.4);
+}
+
+#left-controls button:last-child {
+    margin-bottom: 0;
+}
+
+#left-controls button.state-0 {
+    filter: grayscale(1) opacity(0.4);
+}
+
+#left-controls button.state-2 {
+    filter: grayscale(0) opacity(1);
+}
+
+/* Sun button state 1 - sun colored border (on + beam) */
+#toggle-sun-terminator.state-1 {
+    filter: grayscale(0) opacity(1);
+    border-color: #ff9900;
+    box-shadow: 0 0 8px rgba(255, 150, 0, 0.4);
+}
+
+#toggle-sun-terminator.state-1:hover {
+    border-color: #ffaa00;
+    box-shadow: 0 0 12px rgba(255, 150, 0, 0.5);
+}
+
+/* Moon button state 1 - moon colored border (on + beam) */
+#toggle-moon-terminator.state-1 {
+    filter: grayscale(0) opacity(1);
+    border-color: #88aaff;
+    box-shadow: 0 0 8px rgba(136, 170, 255, 0.4);
+}
+
+#toggle-moon-terminator.state-1:hover {
+    border-color: #99bbff;
+    box-shadow: 0 0 12px rgba(136, 170, 255, 0.5);
+}
+
+/* Grid lines and polar axis toggle active state */
+#left-controls button.active {
+    filter: grayscale(0) opacity(1);
+    border-color: #fff;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+}
+
+#left-controls button:not(.active):not(.state-1):not(.state-2):not(.state-0):not(#toggle-focus-lock) {
+    filter: grayscale(1) opacity(0.4);
+}
+
+/* Focus lock toggle - always appears active as a mode toggle */
+#toggle-focus-lock {
+    position: relative;
+    width: 32px;
+    height: 34px;
+    filter: grayscale(0) opacity(1) !important;
+    font-size: 16px;
+}
+
+#toggle-focus-lock .mode-icon {
+    font-size: 18px;
+    line-height: 1;
+}
+
+#toggle-focus-lock .pin-overlay {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    font-size: 10px;
+    line-height: 1;
+    filter: drop-shadow(0 0 2px rgba(0,0,0,0.8));
+}
+
+#toggle-focus-lock.pinned,
+#toggle-focus-lock.unpinned {
+    border-color: #fff;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+}
+
+
+/* Earth Settings Panel */
+#earth-settings-panel {
+    position: fixed;
+    left: 55px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(20, 20, 25, 0.95);
+    border: 1px solid #444;
+    border-radius: 6px;
+    z-index: 101;
+    min-width: 180px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+}
+
+#earth-settings-panel.hidden { display: none; }
+
+#earth-settings-panel .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    border-bottom: 1px solid #333;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+}
+
+#earth-settings-panel .panel-header button {
+    background: none;
+    border: none;
+    color: #666;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+#earth-settings-panel .panel-header button:hover { color: #fff; }
+
+#earth-settings-panel .panel-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid #222;
+}
+
+#earth-settings-panel .panel-row:last-child { border-bottom: none; }
+
+#earth-settings-panel .panel-row > span {
+    font-size: 11px;
+    color: #888;
+}
+
+#earth-settings-panel .panel-row label {
+    font-size: 11px;
+    color: #888;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+#earth-settings-panel .panel-row input[type="color"] {
+    width: 24px;
+    height: 18px;
+    border: 1px solid #444;
+    border-radius: 3px;
+    background: none;
+    cursor: pointer;
+    padding: 0;
+}
+
+#earth-settings-panel .panel-row input[type="range"] {
+    width: 70px;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #333;
+    border-radius: 2px;
+    cursor: pointer;
+}
+
+#earth-settings-panel .panel-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    background: #4af;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+#earth-settings-panel .panel-row input[type="checkbox"] {
+    accent-color: #4af;
+}
+
+#earth-settings-panel .panel-row.toggle-row {
+    justify-content: space-between;
+}
+
+#earth-settings-panel .panel-row.toggle-row > span {
+    min-width: auto;
+}
+
+#earth-settings-panel .panel-toggle {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #666;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 4px 0;
+    width: 36px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+#earth-settings-panel .panel-toggle:hover {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: #666;
+}
+
+#earth-settings-panel .panel-toggle.active {
+    background: rgba(68, 170, 255, 0.3);
+    border-color: #4af;
+    color: #4af;
+}
+
+#earth-settings-panel .panel-row.terminator-row input[type="range"] {
+    width: 45px;
+}
+
+#earth-settings-panel .terminator-type-btn {
+    margin-left: auto;
+    font-size: 16px;
+    line-height: 1;
+}
+
+#compass {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 18px;
+    font-family: monospace;
+    color: #444;
+    opacity: 0;
+    transition: opacity 0.3s;
+    z-index: 100;
+    overflow: hidden;
+    width: 350px;
+    height: 30px;
+    pointer-events: none;
+}
+
+#compass .compass-celestial {
+    pointer-events: auto;
+}
+
+#compass.visible {
+    opacity: 1;
+}
+
+.compass-track {
+    display: flex;
+    gap: 30px;
+    white-space: nowrap;
+    position: absolute;
+    will-change: transform;
+}
+
+.compass-track .dir {
+    min-width: 30px;
+    text-align: center;
+    transition: color 0.15s, transform 0.15s;
+}
+
+.compass-track .dir.active {
+    color: #fff;
+    transform: scale(1.2);
+}
+
+.compass-track .dir.north {
+    color: #f44;
+}
+
+.compass-track .dir.north.active {
+    color: #f66;
+}
+
+.compass-indicator {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    width: 2px;
+    height: 100%;
+    background: linear-gradient(to bottom, #fff, transparent);
+    transform: translateX(-50%);
+}
+
+.compass-degrees {
+    position: absolute;
+    left: 50%;
+    top: 32px;
+    transform: translateX(-50%);
+    font-size: 14px;
+    color: #888;
+}
+
+.compass-celestial {
+    position: absolute;
+    top: -2px;
+    font-size: 16px;
+    opacity: 0;
+    transition: opacity 0.2s, font-size 0.15s;
+    will-change: transform;
+    cursor: pointer;
+    z-index: 10;
+}
+
+.compass-celestial:hover {
+    font-size: 20px;
+}
+
+.compass-celestial.visible {
+    opacity: 1;
+}
+
+.compass-celestial.below-horizon {
+    opacity: 0.3;
+}
+
+.compass-celestial.locked::after {
+    content: '🔒';
+    position: absolute;
+    font-size: 8px;
+    top: -2px;
+    right: -6px;
+}
+
+.compass-celestial.locked.below-horizon {
+    opacity: 0.6;
+}
+
+/* Time Control */
+#time-control {
+    position: fixed;
+    bottom: 20px;
+    left: 15px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    z-index: 100;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 20px 24px 16px;
+    border-radius: 4px;
+    border: 1px solid #333;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    max-width: calc(100vw - 30px);
+    box-sizing: border-box;
+}
+
+#info-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    justify-content: center;
+    margin-bottom: 8px;
+}
+
+#position-display {
+    position: fixed;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 50;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    background: linear-gradient(135deg, rgba(255, 100, 180, 0.15) 0%, rgba(200, 80, 150, 0.2) 100%);
+    padding: 6px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 100, 180, 0.4);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), 0 0 30px rgba(255, 100, 180, 0.1);
+    width: 680px;
+    max-width: calc(100vw - 20px);
+}
+
+#position-display .label {
+    color: #f6a;
+    font-size: 8px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+/* Info row - three component layout */
+.info-row {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+    flex-wrap: nowrap;
+}
+
+/* Celestial container - left side, expands to fill space but shrinks first */
+.celestial-container {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0;
+    background: rgba(0, 0, 0, 0.6);
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 100, 180, 0.25);
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.celestial-body {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 8px;
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 8px 6px 4px 6px;
+    overflow: hidden;
+}
+
+.celestial-divider {
+    width: 1px;
+    background: linear-gradient(to bottom, transparent, rgba(255, 100, 180, 0.3), transparent);
+    margin: 4px 8px;
+}
+
+/* Body visual section with icon and altitude arc */
+.body-visual {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    flex-shrink: 0;
+}
+
+/* Sun icon with animated rays */
+.sun-icon {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sun-core {
+    width: 20px;
+    height: 20px;
+    background: radial-gradient(circle, #ffee88 0%, #ffcc00 50%, #ff9900 100%);
+    border-radius: 50%;
+    box-shadow: 0 0 15px rgba(255, 200, 0, 0.8), 0 0 30px rgba(255, 150, 0, 0.4);
+    transition: all 0.5s ease;
+}
+
+.sun-rays {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    top: 0;
+    left: 0;
+}
+
+.sun-rays::before,
+.sun-rays::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 36px;
+    height: 36px;
+    border: 2px solid transparent;
+    border-top-color: rgba(255, 200, 0, 0.6);
+    border-bottom-color: rgba(255, 200, 0, 0.6);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    animation: sun-pulse 3s ease-in-out infinite;
+}
+
+.sun-rays::after {
+    width: 44px;
+    height: 44px;
+    border-top-color: rgba(255, 150, 0, 0.3);
+    border-bottom-color: rgba(255, 150, 0, 0.3);
+    animation-delay: 0.5s;
+}
+
+@keyframes sun-pulse {
+    0%, 100% { opacity: 0.4; transform: translate(-50%, -50%) rotate(0deg); }
+    50% { opacity: 1; transform: translate(-50%, -50%) rotate(180deg); }
+}
+
+/* Sun below horizon - dimmed */
+.sun-icon.below .sun-core {
+    background: radial-gradient(circle, #aa8866 0%, #886644 50%, #664422 100%);
+    box-shadow: 0 0 8px rgba(150, 100, 50, 0.4);
+}
+
+.sun-icon.below .sun-rays::before,
+.sun-icon.below .sun-rays::after {
+    opacity: 0.2;
+    animation: none;
+}
+
+/* Moon icon with phase shadow */
+.moon-icon {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.moon-sphere {
+    width: 28px;
+    height: 28px;
+    background: radial-gradient(circle at 30% 30%, #f0f0ff 0%, #c8c8e8 50%, #a0a0c8 100%);
+    border-radius: 50%;
+    box-shadow: 0 0 12px rgba(180, 180, 255, 0.5), inset -3px -3px 8px rgba(0, 0, 0, 0.3);
+    transition: all 0.5s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.moon-shadow {
+    position: absolute;
+    width: 28px;
+    height: 28px;
+    background: linear-gradient(to right, transparent 50%, rgba(0, 0, 20, 0.85) 50%);
+    border-radius: 50%;
+    transition: transform 0.5s ease;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+/* Moon below horizon - dimmed */
+.moon-icon.below .moon-sphere {
+    box-shadow: 0 0 6px rgba(100, 100, 150, 0.3);
+    opacity: 0.5;
+}
+
+/* Altitude arc indicator */
+.altitude-arc {
+    width: 44px;
+    height: 14px;
+    position: relative;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 7px 7px 0 0;
+    overflow: hidden;
+}
+
+.altitude-arc .horizon-line {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.altitude-arc .arc-fill {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    width: 4px;
+    height: 0;
+    background: rgba(255, 200, 0, 0.8);
+    transform: translateX(-50%);
+    transition: height 0.3s ease;
+    border-radius: 2px 2px 0 0;
+}
+
+.sun-section .altitude-arc .arc-fill {
+    background: linear-gradient(to top, #ff9900, #ffcc00);
+    box-shadow: 0 0 6px rgba(255, 150, 0, 0.6);
+}
+
+.moon-section .altitude-arc .arc-fill {
+    background: linear-gradient(to top, #6688cc, #aaccff);
+    box-shadow: 0 0 6px rgba(136, 170, 255, 0.6);
+}
+
+/* Below horizon - arc goes down */
+.altitude-arc.below .arc-fill {
+    top: 100%;
+    bottom: auto;
+    border-radius: 0 0 2px 2px;
+    opacity: 0.5;
+}
+
+/* Body info section */
+.body-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+}
+
+/* Body label under icon */
+.body-visual {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.body-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    font-family: 'Courier New', monospace;
+    margin-top: 6px;
+}
+
+.sun-section .body-label {
+    color: rgba(255, 200, 100, 0.7);
+}
+
+.moon-section .body-label {
+    color: rgba(150, 180, 255, 0.7);
+}
+
+/* Naval-style bearing readout */
+.bearing-readout {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 10px;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(100, 255, 100, 0.15);
+    border-radius: 3px;
+    width: 88px;
+    box-sizing: border-box;
+    margin-left: 10x;
+    font-family: 'Courier New', monospace;
+}
+
+.sun-section .bearing-readout {
+    border-color: rgba(255, 200, 100, 0.2);
+}
+
+.moon-section .bearing-readout {
+    border-color: rgba(150, 180, 255, 0.2);
+}
+
+.bearing-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px;
+}
+
+.bearing-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(100, 255, 100, 0.6);
+    letter-spacing: 0.5px;
+}
+
+.sun-section .bearing-label {
+    color: rgba(255, 200, 100, 0.6);
+}
+
+.moon-section .bearing-label {
+    color: rgba(150, 180, 255, 0.6);
+}
+
+.bearing-value {
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.sun-section .bearing-value {
+    color: #ffcc00;
+    text-shadow: 0 0 6px rgba(255, 200, 0, 0.4);
+}
+
+.sun-section .bearing-value.below {
+    color: #aa8866;
+    text-shadow: none;
+}
+
+.moon-section .bearing-value {
+    color: #aaccff;
+    text-shadow: 0 0 6px rgba(170, 200, 255, 0.4);
+}
+
+.moon-section .bearing-value.below {
+    color: #7788aa;
+    text-shadow: none;
+}
+
+/* Illumination value under MOON label */
+.moon-section .illum-value {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(200, 220, 255, 0.7);
+    font-family: 'Courier New', monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+.info-secondary {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 9px;
+    margin-top: 3px;
+}
+
+.daylight-info {
+    color: rgba(255, 200, 100, 0.8);
+    font-weight: 500;
+    font-size: 12px;
+    min-width: 90px;
+    white-space: nowrap;
+}
+
+.next-event-info {
+    color: rgba(255, 180, 80, 0.7);
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+}
+
+.next-event-info.moon {
+    color: rgba(150, 180, 255, 0.7);
+}
+
+.distance-info {
+    color: rgba(255, 200, 100, 0.5);
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
+}
+
+.phase-name {
+    color: rgba(200, 200, 255, 0.9);
+    font-weight: 500;
+    font-size: 12px;
+}
+
+.info-extra {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    margin-top: 2px;
+    font-family: 'Courier New', monospace;
+}
+
+.moon-age {
+    color: rgba(150, 180, 255, 0.5);
+}
+
+.moon-distance {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+/* Separator pipe */
+.separator {
+    color: rgba(255, 100, 180, 0.3);
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    flex-shrink: 0;
+    align-self: stretch;
+}
+
+/* Location-Time wrapper with eclipse button */
+.location-time-wrapper {
+    display: flex;
+    gap: 0;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 4px;
+    border: 1px solid rgba(255, 100, 180, 0.25);
+    flex-shrink: 0;
+}
+
+/* Location-Time combined container */
+.location-time-container {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 4px 8px;
+    flex-shrink: 0;
+    width: 295px;
+}
+
+.location-time-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.location-time-bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.time-display {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.location-coords {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 2px;
+    font-size: 9px;
+    flex-shrink: 0;
+}
+
+.location-coords .coord {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.location-coords .label {
+    color: rgba(255, 100, 180, 0.5);
+    font-weight: 500;
+    font-size: 7px;
+}
+
+.location-coords .coord span:not(.label) {
+    color: rgba(255, 255, 255, 0.6);
+    font-variant-numeric: tabular-nums;
+    font-size: 9px;
+}
+
+#city-value {
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    text-shadow: 0 0 15px rgba(255, 100, 180, 0.6);
+    letter-spacing: 0.3px;
+    flex: 1;
+    text-align: center;
+}
+
+
+/* City Carousel - embedded horizontal scrollable city picker */
+#city-carousel {
+    width: 100%;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.city-search-bubble {
+    flex-shrink: 0;
+    width: 24px;
+    padding: 4px 6px;
+    margin-left: 4px;
+    margin-right: 6px;
+    background: rgba(255, 100, 180, 0.1);
+    border: 1px solid rgba(255, 100, 180, 0.25);
+    border-radius: 12px;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 10px;
+    font-family: inherit;
+    outline: none;
+    transition: all 0.15s ease;
+    text-align: center;
+    line-height: 1;
+    box-sizing: border-box;
+    height: 22px;
+}
+
+.city-search-bubble:focus {
+    width: 70px;
+    text-align: left;
+    background: rgba(255, 100, 180, 0.25);
+    border-color: #f6a;
+    color: #fff;
+}
+
+.city-search-bubble::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.carousel-scroll {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 8px;
+    scrollbar-width: none;
+    cursor: grab;
+    user-select: none;
+}
+
+.carousel-scroll::-webkit-scrollbar {
+    display: none;
+}
+
+.city-bubble {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    background: rgba(255, 100, 180, 0.1);
+    border: 1px solid rgba(255, 100, 180, 0.25);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    box-sizing: border-box;
+    height: 22px;
+    display: flex;
+    align-items: center;
+}
+
+.city-bubble:hover {
+    background: rgba(255, 100, 180, 0.25);
+    border-color: rgba(255, 100, 180, 0.5);
+}
+
+.city-bubble.current {
+    background: rgba(255, 100, 180, 0.3);
+    border-color: #f6a;
+}
+
+.city-bubble .city-name {
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 10px;
+    font-weight: 500;
+}
+
+.city-bubble:hover .city-name,
+.city-bubble.current .city-name {
+    color: #fff;
+}
+
+.city-bubble .city-utc {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 8px;
+    margin-left: 3px;
+}
+
+.city-bubble:hover .city-utc,
+.city-bubble.current .city-utc {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.time-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+/* Datetime Odometer */
+.datetime-odometer {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    flex: 1;
+    gap: 2px;
+}
+
+.time-section,
+.date-section {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+}
+
+/* Scroll Wheel Picker */
+.scroll-wheel {
+    position: relative;
+    cursor: ns-resize;
+    user-select: none;
+    touch-action: none;
+}
+
+.wheel-viewport {
+    position: relative;
+    height: 78px;
+    overflow: hidden;
+    mask-image: linear-gradient(to bottom,
+        transparent 0%,
+        rgba(0,0,0,0.4) 15%,
+        rgba(0,0,0,1) 35%,
+        rgba(0,0,0,1) 65%,
+        rgba(0,0,0,0.4) 85%,
+        transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom,
+        transparent 0%,
+        rgba(0,0,0,0.4) 15%,
+        rgba(0,0,0,1) 35%,
+        rgba(0,0,0,1) 65%,
+        rgba(0,0,0,0.4) 85%,
+        transparent 100%);
+}
+
+.wheel-track {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transition: transform 0.1s ease-out;
+}
+
+.wheel-item {
+    font-size: 18px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    padding: 0 4px;
+    height: 26px;
+    line-height: 26px;
+    color: rgba(255, 255, 255, 0.35);
+    cursor: pointer;
+    transition: color 0.15s, transform 0.15s;
+}
+
+.wheel-item.current {
+    color: rgba(255, 200, 100, 0.95);
+    transform: scale(1.0);
+}
+
+.wheel-item:not(.current):hover {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* Wheel widths */
+#wheel-hour .wheel-viewport,
+#wheel-minute .wheel-viewport { width: 26px; }
+#wheel-ampm .wheel-viewport { width: 30px; margin-right: 10px;}
+#wheel-month .wheel-viewport { width: 36px; }
+#wheel-day .wheel-viewport { width: 26px; }
+#wheel-year .wheel-viewport { width: 46px;}
+
+/* Dragging state */
+.scroll-wheel.dragging .wheel-track {
+    transition: none;
+}
+
+.scroll-wheel.dragging {
+    cursor: grabbing;
+}
+
+/* City wheel - horizontal layout spanning full width */
+.city-wheel {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+}
+
+.city-wheel .odo-btn {
+    background: rgba(255, 100, 180, 0.15);
+    border: 1px solid rgba(255, 100, 180, 0.3);
+    color: rgba(255, 255, 255, 0.5);
+    padding: 4px 8px;
+    border-radius: 3px;
+}
+
+.city-wheel .odo-btn:hover {
+    background: rgba(255, 100, 180, 0.2);
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.city-wheel .odo-btn:active {
+    background: rgba(255, 100, 180, 0.25);
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.city-wheel .odo-btn.up::after {
+    content: 'WEST';
+}
+
+.city-wheel .odo-btn.down::after {
+    content: 'EAST';
+}
+
+.city-wheel .odo-btn.up,
+.city-wheel .odo-btn.down {
+    font-size: 0;
+}
+
+.city-wheel .odo-btn.up::after,
+.city-wheel .odo-btn.down::after {
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    color: inherit;
+}
+
+.odo-sep {
+    font-size: 18px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.8);
+    align-self: center;
+    margin: 0 -1px;
+}
+
+@keyframes blink-colon {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.datetime-odometer.live .odo-sep {
+    color: #4f8;
+    animation: blink-colon 1s ease-in-out infinite;
+}
+
+.datetime-odometer.simulated .odo-sep {
+    color: rgba(255, 200, 100, 0.95);
+    animation: blink-colon 1s ease-in-out infinite;
+}
+
+.datetime-odometer.paused .odo-sep {
+    color: #f66;
+    animation: none;
+}
+
+.odo-dash {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.4);
+    align-self: center;
+    margin: 0 4px;
+}
+
+.odo-utc {
+    font-size: 10px;
+    color: rgba(255, 100, 180, 0.7);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    padding-bottom: 2px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid rgba(255, 100, 180, 0.2);
+}
+
+/* State colors */
+.datetime-odometer.live .wheel-item.current {
+    color: #4f8;
+}
+
+.datetime-odometer.simulated .wheel-item.current {
+    color: rgba(255, 200, 100, 0.95);
+}
+
+.datetime-odometer.paused .wheel-item.current {
+    color: #f66;
+}
+
+/* Eclipse button - total solar eclipse style */
+.eclipse-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    background: radial-gradient(circle at center, #0a0a0a 40%, #1a1a1a 100%);
+    border: 2px solid rgba(255, 180, 60, 0.7);
+    border-left: none;
+    border-radius: 0 4px 4px 0;
+    padding: 4px 5px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow:
+        inset 0 0 10px rgba(0, 0, 0, 0.8),
+        0 0 8px rgba(255, 160, 40, 0.3);
+}
+
+.eclipse-btn span {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 8px;
+    font-weight: 700;
+    color: rgba(255, 200, 80, 0.95);
+    text-shadow:
+        0 0 4px rgba(255, 180, 60, 0.8),
+        0 0 8px rgba(255, 140, 20, 0.5);
+    line-height: 0.9;
+    letter-spacing: 1px;
+}
+
+@media (hover: hover) {
+    .eclipse-btn:hover {
+        border-color: rgba(255, 200, 80, 0.95);
+        box-shadow:
+            inset 0 0 10px rgba(0, 0, 0, 0.8),
+            0 0 12px rgba(255, 180, 60, 0.5);
+    }
+
+    .eclipse-btn:hover span {
+        color: rgba(255, 220, 120, 1);
+        text-shadow:
+            0 0 6px rgba(255, 200, 80, 1),
+            0 0 12px rgba(255, 160, 40, 0.7);
+    }
+}
+
+.eclipse-btn.active {
+    border-color: rgba(255, 220, 100, 1);
+    box-shadow:
+        inset 0 0 10px rgba(0, 0, 0, 0.8),
+        0 0 16px rgba(255, 200, 80, 0.6);
+}
+
+.eclipse-btn.active span {
+    color: rgba(255, 240, 160, 1);
+    text-shadow:
+        0 0 8px rgba(255, 220, 100, 1),
+        0 0 16px rgba(255, 180, 60, 0.8);
+}
+
+/* Legacy event-row styles removed - now using celestial-body layout */
+
+/* Timeline Section */
+.timeline-section {
+    padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.6);
+    padding: 4px 6px 10px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 100, 180, 0.25);
+}
+
+.playback-controls {
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(0, 0, 0, 0.6);
+    padding: 3px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 100, 180, 0.25);
+    margin: 4px 0 0 0;
+    flex-wrap: nowrap;
+}
+
+.playback-controls .left-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.playback-controls .center-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.playback-controls .right-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.playback-controls button {
+    background: rgba(255, 100, 180, 0.15);
+    border: 1px solid rgba(255, 100, 180, 0.3);
+    color: rgba(255, 255, 255, 0.5);
+    padding: 3px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    position: relative;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+/* Direction toggle button */
+.direction-toggle {
+    min-width: 65px;
+    padding: 3px 6px !important;
+    font-size: 8px !important;
+    letter-spacing: 0.5px;
+}
+
+.direction-toggle .forward-text,
+.direction-toggle .reverse-text {
+    display: none;
+}
+
+/* Show forward by default (direction = 1) */
+.direction-toggle .forward-text {
+    display: block;
+}
+
+/* Show reverse when direction = -1 */
+.direction-toggle.reverse .forward-text {
+    display: none;
+}
+
+.direction-toggle.reverse .reverse-text {
+    display: block;
+}
+
+/* Play/Pause button icon toggling */
+.play-pause-toggle .play-icon,
+.play-pause-toggle .pause-icon {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+/* Show play icon when paused */
+.play-pause-toggle.paused .play-icon {
+    display: block;
+}
+
+.play-pause-toggle.paused .pause-icon {
+    display: none;
+}
+
+/* Show pause icon when playing */
+.play-pause-toggle:not(.paused) .play-icon {
+    display: none;
+}
+
+.play-pause-toggle:not(.paused) .pause-icon {
+    display: block;
+}
+
+.playback-controls button:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    background: rgba(255, 100, 180, 0.1);
+    border-color: rgba(255, 100, 180, 0.2);
+}
+
+.playback-controls button:disabled:active {
+    background: rgba(255, 100, 180, 0.1);
+    color: rgba(255, 255, 255, 0.5);
+    border-color: rgba(255, 100, 180, 0.2);
+}
+
+#speed-display {
+    font-size: 8px;
+    color: rgba(255, 255, 255, 0.7);
+    min-width: 30px;
+    text-align: center;
+    font-weight: 600;
+}
+
+.system-time-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+.system-time-row > span {
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+}
+
+#system-date-display,
+#system-time-display {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.utc-label {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.live-offset {
+    color: rgba(255, 200, 100, 0.95);
+}
+
+.live-offset:empty {
+    display: none;
+}
+
+.now-btn {
+    padding: 3px 12px !important;
+    font-size: 8px !important;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    background: rgba(255, 100, 180, 0.15) !important;
+    color: rgba(255, 255, 255, 0.6) !important;
+    border: 1px solid rgba(255, 100, 180, 0.3) !important;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: none;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    min-width: 50px;
+    justify-content: center;
+}
+
+.now-btn.active {
+    background: rgba(255, 100, 180, 0.25) !important;
+    border-color: rgba(255, 100, 180, 0.5) !important;
+}
+
+.now-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+#slider-markers {
+    position: absolute;
+    top: 30px;
+    left: 6px;
+    right: 6px;
+    height: 4px;
+    pointer-events: none;
+    z-index: 1;
+    overflow: visible;
+}
+
+/* Visibility bars - show daylight/moonlight periods */
+.visibility-bar {
+    position: absolute;
+    height: 3px;
+    border-radius: 2px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.visibility-bar.visible {
+    opacity: 1;
+}
+
+/* Sun visibility bar - aligned with bottom of sun ticks */
+.sun-bar {
+    top: 2px;
+    background: linear-gradient(90deg, #ffcc00 0%, #ff9900 30%, #ff6644 70%, #ff4422 100%);
+    box-shadow: 0 0 8px rgba(255, 150, 0, 0.6), 0 0 16px rgba(255, 100, 0, 0.3);
+    animation: sun-bar-glow 2s ease-in-out infinite;
+}
+
+@keyframes sun-bar-glow {
+    0%, 100% {
+        box-shadow: 0 0 6px rgba(255, 150, 0, 0.5), 0 0 12px rgba(255, 100, 0, 0.2);
+        filter: brightness(1);
+    }
+    50% {
+        box-shadow: 0 0 10px rgba(255, 150, 0, 0.8), 0 0 20px rgba(255, 100, 0, 0.4);
+        filter: brightness(1.1);
+    }
+}
+
+/* Moon visibility bar - aligned with top of moon ticks */
+.moon-bar {
+    top: 16px;
+    background: linear-gradient(90deg, #aaccff 0%, #8899ee 40%, #7788dd 60%, #6677cc 100%);
+    box-shadow: 0 0 8px rgba(136, 170, 255, 0.6), 0 0 16px rgba(100, 130, 220, 0.3);
+    animation: moon-bar-glow 3s ease-in-out infinite;
+}
+
+@keyframes moon-bar-glow {
+    0%, 100% {
+        box-shadow: 0 0 6px rgba(136, 170, 255, 0.5), 0 0 12px rgba(100, 130, 220, 0.2);
+        filter: brightness(1);
+    }
+    50% {
+        box-shadow: 0 0 12px rgba(136, 170, 255, 0.9), 0 0 24px rgba(100, 130, 220, 0.5);
+        filter: brightness(1.15);
+    }
+}
+
+/* Shimmer effect overlay */
+.visibility-bar::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.3) 50%,
+        transparent 100%);
+    background-size: 200% 100%;
+    animation: bar-shimmer 3s ease-in-out infinite;
+    border-radius: inherit;
+}
+
+@keyframes bar-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.moon-bar::after {
+    animation-duration: 4s;
+}
+
+.slider-container {
+    flex: 1;
+    position: relative;
+    padding: 30px 0 28px 0;
+}
+
+.time-ticks {
+    position: absolute;
+    top: 0;
+    left: 6px;
+    right: 6px;
+    height: 100%;
+    pointer-events: none;
+}
+
+.time-ticks .tick {
+    position: absolute;
+    top: 27px;
+    width: 1px;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.2);
+    transform: translateX(-50%);
+}
+
+.time-ticks .tick.label {
+    height: 8px;
+    background: rgba(255, 255, 255, 0.35);
+}
+
+.time-ticks .tick.label span {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-bottom: 1px;
+    font-size: 8px;
+    color: rgba(255, 255, 255, 0.5);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.time-ticks .tick.noon span {
+    color: rgba(255, 255, 255, 0.7);
+    font-weight: 600;
+}
+
+#time-slider {
+    width: 100%;
+}
+
+.event-marker {
+    position: absolute;
+    width: 3px;
+    transform: translateX(-50%);
+    opacity: 0.95;
+    border-radius: 2px;
+    overflow: visible;
+}
+
+/* Sun markers - above the track */
+.event-marker.sunrise,
+.event-marker.sunset {
+    height: 18px;
+    top: -14px;
+}
+
+/* Moon markers - below the track */
+.event-marker.moonrise,
+.event-marker.moonset {
+    height: 18px;
+    top: 16px;
+}
+
+/* Labels for all markers */
+.event-marker::after {
+    content: attr(data-label);
+    position: absolute;
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    letter-spacing: 0.3px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+/* Sun labels above */
+.event-marker.sunrise::after,
+.event-marker.sunset::after {
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-bottom: 1px;
+}
+
+/* Moon labels below */
+.event-marker.moonrise::after,
+.event-marker.moonset::after {
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 1px;
+}
+
+.event-marker.now {
+    display: none;
+}
+
+/* Noon marker - center of timeline */
+.noon-marker {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 1px;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.15);
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Day boundary markers - midnight at edges */
+.day-boundary-marker {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 1px;
+    height: 12px;
+    background: rgba(255, 100, 180, 0.2);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.day-boundary-marker.left {
+    left: 0;
+}
+
+.day-boundary-marker.right {
+    right: 0;
+}
+
+/* Animations for rising/setting symbols */
+@keyframes rise-up {
+    0% { top: calc(100% - 10px); opacity: 0.3; }
+    50% { opacity: 1; }
+    100% { top: -6px; opacity: 0.3; }
+}
+
+@keyframes fall-down {
+    0% { top: -6px; opacity: 0.3; }
+    50% { opacity: 1; }
+    100% { top: calc(100% - 10px); opacity: 0.3; }
+}
+
+/* Sunrise marker */
+.event-marker.sunrise {
+    background: linear-gradient(to top, #f90, #fc0);
+    box-shadow: 0 0 8px rgba(255, 150, 0, 0.7);
+}
+.event-marker.sunrise::after {
+    color: #fc0;
+}
+.event-marker.sunrise::before {
+    content: '☀';
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: #f90;
+    text-shadow: 0 0 6px rgba(255, 150, 0, 0.8);
+    animation: rise-up 0.6s ease-in-out infinite;
+}
+
+/* Sunset marker */
+.event-marker.sunset {
+    background: linear-gradient(to bottom, #fc0, #f54);
+    box-shadow: 0 0 8px rgba(255, 85, 68, 0.7);
+}
+.event-marker.sunset::after {
+    color: #f90;
+}
+.event-marker.sunset::before {
+    content: '☀';
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: #f54;
+    text-shadow: 0 0 6px rgba(255, 85, 68, 0.8);
+    animation: fall-down 0.6s ease-in-out infinite;
+}
+
+/* Moonrise marker */
+.event-marker.moonrise {
+    background: linear-gradient(to top, #8af, #adf);
+    box-shadow: 0 0 8px rgba(136, 170, 255, 0.7);
+}
+.event-marker.moonrise::after {
+    color: #adf;
+}
+.event-marker.moonrise::before {
+    content: '◐';
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    color: #8af;
+    text-shadow: 0 0 6px rgba(136, 170, 255, 0.8);
+    animation: rise-up 0.7s ease-in-out infinite;
+}
+
+/* Moonset marker */
+.event-marker.moonset {
+    background: linear-gradient(to top, #66c, #88e);
+    box-shadow: 0 0 8px rgba(102, 102, 204, 0.7);
+}
+.event-marker.moonset::after {
+    color: #88e;
+}
+.event-marker.moonset::before {
+    content: '◐';
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    color: #66c;
+    text-shadow: 0 0 6px rgba(102, 102, 204, 0.8);
+    animation: fall-down 0.7s ease-in-out infinite;
+}
+
+#time-slider {
+    width: 100%;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: rgba(255, 100, 180, 0.3);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+    position: relative;
+    z-index: 2;
+}
+
+#time-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    background: #fff;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.15s;
+    box-shadow: 0 0 8px rgba(255, 100, 180, 0.6);
+}
+
+#time-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+    box-shadow: 0 0 12px rgba(255, 100, 180, 0.8);
+}
+
+#time-slider.live::-webkit-slider-thumb {
+    background: #4f8;
+    box-shadow: 0 0 8px rgba(68, 255, 136, 0.6);
+}
+
+#time-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    background: #fff;
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s;
+    box-shadow: 0 0 8px rgba(255, 100, 180, 0.6);
+}
+
+#time-slider.live::-moz-range-thumb {
+    background: #4f8;
+    box-shadow: 0 0 8px rgba(68, 255, 136, 0.6);
+}
+
+/* Calendar Popup */
+#calendar-popup {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, rgba(30, 25, 35, 0.95) 0%, rgba(25, 20, 30, 0.98) 100%);
+    border: 1px solid rgba(255, 100, 180, 0.3);
+    border-radius: 6px;
+    padding: 8px;
+    display: none;
+    z-index: 1000;
+    font-family: inherit;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 20px rgba(255, 100, 180, 0.08);
+}
+
+#calendar-popup.visible {
+    display: flex;
+    flex-direction: column;
+}
+
+.eclipse-panel-content {
+    display: flex;
+    flex-direction: column;
+    width: 200px;
+    height: 175px;
+}
+
+.events-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: #f6a;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid rgba(255, 100, 180, 0.2);
+}
+
+.eclipse-filters {
+    display: flex;
+    padding: 0 0 4px 0;
+    margin-bottom: 3px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.filter-toggle-group {
+    display: flex;
+    flex: 1;
+    height: 24px;
+    border-radius: 3px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(0, 0, 0, 0.2);
+}
+
+.filter-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: 4px;
+    padding: 0 8px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    transition: flex 0.2s ease, background 0.2s ease, color 0.2s ease;
+    overflow: hidden;
+}
+
+.filter-toggle .icon {
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+.filter-toggle .label {
+    transition: all 0.2s ease;
+}
+
+.filter-toggle .label,
+.filter-toggle .suffix {
+    display: none;
+    margin-left: 3px;
+}
+
+/* Active toggle: expanded with full text */
+.filter-toggle.active {
+    flex: 4;
+    cursor: default;
+}
+
+.filter-toggle.active .label,
+.filter-toggle.active .suffix {
+    display: inline;
+}
+
+.filter-toggle.active .icon {
+    display: none;
+}
+
+/* Inactive toggle: shrunk to icon only */
+.filter-toggle:not(.active) {
+    flex: 1;
+    cursor: pointer;
+}
+
+.filter-toggle.solar {
+    color: rgba(255, 200, 100, 0.5);
+    background: rgba(20, 12, 8, 0.95);
+    border: 2px solid rgba(255, 180, 60, 0.3);
+}
+
+.filter-toggle.lunar {
+    color: rgba(160, 170, 255, 0.5);
+    background: rgba(12, 12, 20, 0.95);
+    border: 2px solid rgba(136, 153, 255, 0.3);
+}
+
+.filter-toggle.solar.active {
+    color: rgba(255, 220, 100, 1);
+    background: rgba(20, 12, 8, 0.95);
+    border: 1px solid rgba(255, 220, 100, 1);
+    box-shadow:
+        inset 0 0 8px rgba(0, 0, 0, 0.8),
+        0 0 8px rgba(255, 160, 40, 0.3);
+}
+
+.filter-toggle.lunar.active {
+    color: rgba(180, 190, 255, 0.9);
+    background: rgba(12, 12, 20, 0.95);
+    border: 1px solid rgba(136, 153, 255, 0.7);
+    box-shadow:
+        inset 0 0 8px rgba(0, 0, 0, 0.8),
+        0 0 8px rgba(136, 153, 255, 0.3);
+}
+
+@media (hover: hover) {
+    .filter-toggle:not(.active):hover {
+        filter: brightness(1.3);
+    }
+}
+
+/* Eclipse icon base styles */
+.eclipse-icon, .filter-icon {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+}
+
+.filter-icon {
+    width: 16px;
+    height: 16px;
+}
+
+.eclipse-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+/* Solar Total - black disk with white corona */
+.solar-total {
+    background: radial-gradient(circle, #000 40%, transparent 41%);
+}
+.solar-total .corona {
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    background: radial-gradient(circle, transparent 35%, rgba(255, 220, 150, 0.8) 40%, rgba(255, 200, 100, 0.4) 55%, transparent 70%);
+}
+.solar-total .moon-disk {
+    position: absolute;
+    inset: 15%;
+    border-radius: 50%;
+    background: #111;
+}
+
+/* Solar Annular - ring of fire */
+.solar-annular {
+    background: #000;
+}
+.solar-annular .sun-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: radial-gradient(circle, transparent 30%, #ffaa00 35%, #ff8800 50%, #ff6600 60%, transparent 65%);
+}
+.solar-annular .moon-disk {
+    position: absolute;
+    inset: 20%;
+    border-radius: 50%;
+    background: #111;
+}
+
+/* Solar Partial - sun with bite */
+.solar-partial {
+    background: #000;
+    overflow: hidden;
+}
+.solar-partial .sun-disk {
+    position: absolute;
+    inset: 5%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #ffee88, #ffcc00);
+}
+.solar-partial .moon-bite {
+    position: absolute;
+    width: 90%;
+    height: 90%;
+    border-radius: 50%;
+    background: #111;
+    top: -30%;
+    right: -30%;
+}
+
+/* Solar Hybrid - corona with thin ring */
+.solar-hybrid {
+    background: radial-gradient(circle, #000 40%, transparent 41%);
+}
+.solar-hybrid .corona {
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    background: radial-gradient(circle, transparent 35%, rgba(255, 220, 150, 0.6) 40%, rgba(255, 180, 80, 0.3) 55%, transparent 65%);
+}
+.solar-hybrid .moon-disk {
+    position: absolute;
+    inset: 18%;
+    border-radius: 50%;
+    background: #111;
+}
+.solar-hybrid .hybrid-ring {
+    position: absolute;
+    inset: 15%;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 150, 50, 0.6);
+    background: transparent;
+}
+
+/* Lunar Total - blood moon */
+.lunar-total {
+    background: #000;
+}
+.lunar-total .blood-moon {
+    position: absolute;
+    inset: 10%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #cc4444, #882222 60%, #441111);
+    box-shadow: 0 0 4px rgba(200, 80, 80, 0.5);
+}
+
+/* Lunar Partial - half shadow */
+.lunar-partial {
+    background: #000;
+    overflow: hidden;
+}
+.lunar-partial .moon-lit {
+    position: absolute;
+    inset: 10%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #eee, #ccc 70%, #aaa);
+}
+.lunar-partial .shadow-bite {
+    position: absolute;
+    width: 80%;
+    height: 80%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 60% 40%, #442222, #221111);
+    top: 5%;
+    left: 35%;
+}
+
+/* Lunar Penumbral - slightly dimmed moon */
+.lunar-penumbral {
+    background: #000;
+}
+.lunar-penumbral .moon-dim {
+    position: absolute;
+    inset: 10%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #aaa, #777 60%, #555);
+    box-shadow: inset 3px 3px 6px rgba(0, 0, 0, 0.4);
+}
+
+.events-list-container {
+    flex: 1;
+    display: flex;
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.events-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    cursor: grab;
+}
+
+.events-list::-webkit-scrollbar {
+    display: none;
+}
+
+.events-list {
+    scrollbar-width: none;
+}
+
+/* Custom year scrollbar */
+.year-scrollbar {
+    display: flex;
+    flex-direction: column;
+    width: 36px;
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    padding: 2px 0;
+    pointer-events: none;
+}
+
+.year-scrollbar-track,
+.year-scrollbar-thumb {
+    pointer-events: auto;
+}
+
+.year-scrollbar-track {
+    position: absolute;
+    right: 14px;
+    top: 2px;
+    bottom: 2px;
+    width: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+    cursor: pointer;
+}
+
+.year-scrollbar-thumb {
+    position: absolute;
+    right: 16px;
+    transform: translateX(50%);
+    display: flex;
+    align-items: center;
+    height: 22px;
+    cursor: grab;
+    touch-action: none;
+}
+
+.year-scrollbar-thumb:hover,
+.year-scrollbar-thumb.dragging {
+    cursor: grabbing;
+}
+
+.year-indicator {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 3px;
+    padding: 2px 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    transition: all 0.15s ease;
+}
+
+/* Solar theme (default) */
+.year-scrollbar.solar .year-indicator {
+    color: rgba(255, 220, 100, 1);
+    background: rgba(20, 12, 8, 0.95);
+    border: 1px solid rgba(255, 220, 100, 1);
+}
+
+.year-scrollbar.solar .year-scrollbar-thumb:hover .year-indicator,
+.year-scrollbar.solar .year-scrollbar-thumb.dragging .year-indicator {
+    background: rgba(255, 180, 60, 0.25);
+    box-shadow: 0 0 8px rgba(255, 180, 60, 0.4);
+}
+
+/* Lunar theme */
+.year-scrollbar.lunar .year-indicator {
+    color: rgba(180, 190, 255, 0.9);
+    background: rgba(12, 12, 20, 0.95);
+    border: 1px solid rgba(136, 153, 255, 0.7);
+}
+
+.year-scrollbar.lunar .year-scrollbar-thumb:hover .year-indicator,
+.year-scrollbar.lunar .year-scrollbar-thumb.dragging .year-indicator {
+    background: rgba(136, 153, 255, 0.25);
+    box-shadow: 0 0 8px rgba(136, 153, 255, 0.4);
+}
+
+/* Year divider in eclipse list */
+.year-divider {
+    height: 1px;
+    margin: 3px 0;
+    background: rgba(255, 255, 255, 0.15);
+    transition: all 0.2s ease;
+}
+
+.year-divider.active {
+    height: 2px;
+    background: rgba(255, 180, 60, 0.7);
+    box-shadow: 0 0 6px rgba(255, 180, 60, 0.5);
+}
+
+/* Lunar theme year divider */
+.year-scrollbar.lunar ~ .events-list .year-divider.active,
+.events-list-container:has(.year-scrollbar.lunar) .year-divider.active {
+    background: rgba(136, 153, 255, 0.6);
+    box-shadow: 0 0 4px rgba(136, 153, 255, 0.4);
+}
+
+.event-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 5px;
+    border-radius: 3px 0 0 3px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    position: relative;
+}
+
+/* Solar eclipse subtypes */
+.event-item.solar.total {
+    background: linear-gradient(90deg, rgba(255, 200, 100, 0.15) 0%, rgba(0, 0, 0, 0.3) 100%);
+    border-left-color: #ffcc66;
+}
+.event-item.solar.annular {
+    background: linear-gradient(90deg, rgba(255, 150, 50, 0.15) 0%, rgba(0, 0, 0, 0.3) 100%);
+    border-left-color: #ff9933;
+}
+.event-item.solar.partial {
+    background: linear-gradient(90deg, rgba(255, 220, 100, 0.1) 0%, rgba(0, 0, 0, 0.3) 100%);
+    border-left-color: #ffdd66;
+}
+.event-item.solar.hybrid {
+    background: linear-gradient(90deg, rgba(255, 180, 80, 0.12) 0%, rgba(0, 0, 0, 0.3) 100%);
+    border-left-color: #ffbb55;
+}
+
+/* Lunar eclipse subtypes */
+.event-item.lunar.total {
+    background: linear-gradient(90deg, rgba(180, 60, 60, 0.2) 0%, rgba(0, 0, 0, 0.3) 100%);
+    border-left-color: #cc4444;
+}
+.event-item.lunar.partial {
+    background: linear-gradient(90deg, rgba(136, 153, 255, 0.12) 0%, rgba(0, 0, 0, 0.3) 100%);
+    border-left-color: #8899ff;
+}
+.event-item.lunar.penumbral {
+    background: linear-gradient(90deg, rgba(100, 100, 120, 0.15) 0%, rgba(0, 0, 0, 0.3) 100%);
+    border-left-color: #888899;
+}
+
+/* Hover states - only on devices with hover capability */
+@media (hover: hover) {
+    .event-item.solar.total:hover {
+        background: linear-gradient(90deg, rgba(255, 200, 100, 0.35) 0%, rgba(0, 0, 0, 0.2) 100%);
+    }
+    .event-item.solar.annular:hover {
+        background: linear-gradient(90deg, rgba(255, 150, 50, 0.35) 0%, rgba(0, 0, 0, 0.2) 100%);
+    }
+    .event-item.solar.partial:hover {
+        background: linear-gradient(90deg, rgba(255, 220, 100, 0.3) 0%, rgba(0, 0, 0, 0.2) 100%);
+    }
+    .event-item.solar.hybrid:hover {
+        background: linear-gradient(90deg, rgba(255, 180, 80, 0.32) 0%, rgba(0, 0, 0, 0.2) 100%);
+    }
+    .event-item.lunar.total:hover {
+        background: linear-gradient(90deg, rgba(180, 60, 60, 0.4) 0%, rgba(0, 0, 0, 0.2) 100%);
+    }
+    .event-item.lunar.partial:hover {
+        background: linear-gradient(90deg, rgba(136, 153, 255, 0.3) 0%, rgba(0, 0, 0, 0.2) 100%);
+    }
+    .event-item.lunar.penumbral:hover {
+        background: linear-gradient(90deg, rgba(100, 100, 120, 0.35) 0%, rgba(0, 0, 0, 0.2) 100%);
+    }
+}
+
+.event-item.loading {
+    cursor: default;
+    opacity: 0.7;
+    font-style: italic;
+    justify-content: center;
+    border-left: none;
+    background: transparent;
+}
+
+@media (hover: hover) {
+    .event-item.loading:hover {
+        background: transparent;
+    }
+}
+
+.event-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    min-width: 0;
+    flex: 1;
+}
+
+.event-name {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.event-datetime {
+    display: flex;
+    gap: 6px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.event-time {
+    color: rgba(255, 255, 255, 0.4);
+    text-align: right;
+    width: 52px;
+    flex-shrink: 0;
+    margin-right: 10px;
+}
+
+/* Disabled slider during simulation */
+#time-slider:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Top celestial display - hidden by default, shown on narrow screens */
+#celestial-top-display {
+    display: none;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 50;
+    background: linear-gradient(135deg, rgba(255, 100, 180, 0.15) 0%, rgba(200, 80, 150, 0.2) 100%);
+    padding: 4px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 100, 180, 0.4);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), 0 0 20px rgba(255, 100, 180, 0.1);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+}
+
+#celestial-top-display.visible {
+    display: block;
+}
+
+#celestial-top-display.ui-hidden {
+    display: none !important;
+}
+
+#celestial-top-display .celestial-container {
+    flex: none;
+    min-width: auto;
+    width: auto;
+    padding: 4px 6px;
+    min-height: auto;
+    justify-content: center;
+}
+
+#celestial-top-display .celestial-body {
+    flex: none;
+    padding: 2px 4px;
+    gap: 4px;
+}
+
+#celestial-top-display .celestial-divider {
+    margin: 2px 4px;
+}
+
+#celestial-top-display .body-visual {
+    gap: 2px;
+}
+
+#celestial-top-display .sun-icon,
+#celestial-top-display .moon-icon {
+    width: 26px;
+    height: 26px;
+}
+
+#celestial-top-display .sun-core {
+    width: 14px;
+    height: 14px;
+}
+
+#celestial-top-display .sun-rays::before,
+#celestial-top-display .sun-rays::after {
+    width: 22px;
+    height: 22px;
+}
+
+#celestial-top-display .sun-rays::after {
+    width: 26px;
+    height: 26px;
+}
+
+#celestial-top-display .moon-sphere,
+#celestial-top-display .moon-shadow {
+    width: 18px;
+    height: 18px;
+}
+
+#celestial-top-display .altitude-arc {
+    width: 26px;
+    height: 8px;
+}
+
+#celestial-top-display .altitude-value {
+    font-size: 12px;
+}
+
+#celestial-top-display .direction-badge {
+    font-size: 7px;
+    padding: 1px 3px;
+}
+
+#celestial-top-display .info-secondary {
+    font-size: 8px;
+}
+
+#celestial-top-display .daylight-info,
+#celestial-top-display .phase-name {
+    font-size: 9px;
+}
+
+#celestial-top-display .illumination {
+    font-size: 8px;
+}
+
+/* Compact celestial container at medium widths */
+@media (max-width: 850px) {
+    .celestial-container {
+        padding: 3px 6px;
+    }
+
+    .celestial-body {
+        gap: 5px;
+        padding: 2px 4px;
+    }
+
+    .celestial-divider {
+        margin: 2px 4px;
+    }
+
+    .body-visual {
+        gap: 2px;
+    }
+
+    .sun-icon,
+    .moon-icon {
+        width: 32px;
+        height: 32px;
+    }
+
+    .sun-core {
+        width: 15px;
+        height: 15px;
+    }
+
+    .moon-sphere,
+    .moon-shadow {
+        width: 22px;
+        height: 22px;
+    }
+
+    .altitude-arc {
+        width: 34px;
+        height: 10px;
+    }
+
+    .altitude-value {
+        font-size: 13px;
+    }
+
+    .direction-badge {
+        font-size: 7px;
+        padding: 1px 3px;
+    }
+
+    .daylight-info,
+    .phase-name {
+        font-size: 9px;
+    }
+
+    .illumination {
+        font-size: 8px;
+    }
+}
+
+/* Even more compact at narrower widths */
+@media (max-width: 720px) {
+    .celestial-container {
+        padding: 2px 5px;
+    }
+
+    .celestial-body {
+        gap: 4px;
+        padding: 2px;
+    }
+
+    .celestial-divider {
+        margin: 2px;
+    }
+
+    .sun-icon,
+    .moon-icon {
+        width: 28px;
+        height: 28px;
+    }
+
+    .sun-core {
+        width: 14px;
+        height: 14px;
+    }
+
+    .moon-sphere,
+    .moon-shadow {
+        width: 20px;
+        height: 20px;
+    }
+
+    .sun-rays::before,
+    .sun-rays::after {
+        width: 24px;
+        height: 24px;
+    }
+
+    .sun-rays::after {
+        width: 30px;
+        height: 30px;
+    }
+
+    .altitude-arc {
+        width: 30px;
+        height: 10px;
+    }
+
+    .altitude-value {
+        font-size: 12px;
+    }
+
+    .info-secondary {
+        font-size: 8px;
+    }
+
+    .daylight-info,
+    .phase-name {
+        font-size: 9px;
+    }
+
+    .illumination {
+        font-size: 8px;
+    }
+
+    .playback-controls {
+        gap: 3px;
+        padding: 3px 5px;
+    }
+
+    .playback-controls .left-controls,
+    .playback-controls .right-controls {
+        gap: 3px;
+    }
+
+    .direction-toggle {
+        min-width: 58px;
+        padding: 2px 5px !important;
+        font-size: 7px !important;
+    }
+
+    .system-time-row {
+        gap: 5px;
+    }
+
+    .system-time-row > span {
+        font-size: 9px;
+    }
+
+    .now-btn {
+        padding: 2px 8px !important;
+        min-width: 40px;
+    }
+}
+
+/* Narrow screen - position display adjustments */
+@media (max-width: 620px) {
+    #position-display {
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+        width: auto;
+        transform: none;
+    }
+
+    #position-display .info-row {
+        row-gap: 4px;
+    }
+}
+
+/* Mobile adjustments */
+@media (max-width: 600px) {
+    #position-display {
+        font-size: 10px;
+        left: 10px;
+        right: 10px;
+        bottom: 1px;
+        transform: none;
+        min-width: auto;
+        width: auto;
+        padding: 5px 8px;
+    }
+
+    .info-row {
+        gap: 4px;
+    }
+
+    .separator {
+        font-size: 14px;
+        padding: 0 4px;
+    }
+
+    .celestial-container {
+        padding: 2px 5px;
+        gap: 2px;
+    }
+
+    .event-row {
+        gap: 3px;
+        font-size: 8px;
+    }
+
+    .event-row .body-icon {
+        font-size: 12px;
+        width: 12px;
+    }
+
+    .location-time-container {
+        padding: 3px 5px;
+        gap: 2px;
+    }
+
+    .location-time-top {
+        gap: 6px;
+    }
+
+    .location-time-bottom {
+        gap: 6px;
+    }
+
+    #city-value {
+        font-size: 11px;
+    }
+
+    .location-coords {
+        gap: 1px;
+        font-size: 8px;
+    }
+
+    .time-container {
+        gap: 1px;
+    }
+
+    .time-display {
+        gap: 3px;
+    }
+
+    #local-datetime-value {
+        font-size: 14px;
+    }
+
+    .playback-controls {
+        padding: 3px 4px;
+        gap: 2px;
+    }
+
+    .playback-controls .left-controls {
+        gap: 2px;
+    }
+
+    .playback-controls .right-controls {
+        gap: 2px;
+    }
+
+    .playback-controls button {
+        width: 18px;
+        height: 18px;
+        font-size: 10px;
+    }
+
+    .direction-toggle {
+        min-width: 55px;
+        padding: 2px 4px !important;
+        font-size: 7px !important;
+    }
+
+    #speed-display {
+        min-width: 20px;
+        font-size: 6px;
+    }
+
+    .system-time-row {
+        gap: 4px;
+    }
+
+    .system-time-row > span {
+        font-size: 8px;
+    }
+
+    .now-btn {
+        padding: 2px 6px !important;
+        font-size: 7px !important;
+        height: 18px;
+        min-width: 36px;
+    }
+
+    #calendar-popup {
+        right: auto;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: calc(100vw - 40px);
+    }
+}
+
+/* Portrait mode adjustments */
+@media (max-width: 500px), (orientation: portrait) and (max-width: 700px) {
+    #position-display {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        padding: 0;
+    }
+
+    .info-row {
+        flex-wrap: wrap;
+    }
+
+    .location-time-wrapper {
+        width: 100%;
+        flex: 1 1 100%;
+        order: 2;
+    }
+
+    .location-time-container {
+        width: auto;
+        max-width: calc(100% - 18px);
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    #city-carousel {
+        max-width: 100%;
+        overflow: hidden;
+    }
+
+    .carousel-scroll {
+        max-width: calc(100% - 30px);
+        overflow-x: auto;
+    }
+
+    .datetime-odometer {
+        flex-wrap: nowrap;
+        overflow: visible;
+    }
+
+    .celestial-container {
+        flex: 1 1 100%;
+        width: 100%;
+        justify-content: space-between;
+        background: transparent;
+        border: none;
+        padding: 0;
+        gap: 0;
+        order: 1;
+    }
+
+    .celestial-container .celestial-divider {
+        display: none;
+    }
+
+    .celestial-container .sun-section,
+    .celestial-container .moon-section {
+        background: rgba(0, 0, 0, 0.6);
+        border: 1px solid rgba(255, 100, 180, 0.25);
+        border-radius: 4px;
+        padding: 2px 6px;
+        flex: 0 0 auto;
+        width: 175px;
+        overflow: hidden;
+    }
+
+    .celestial-container .sun-section {
+        margin-right: auto;
+    }
+
+    .celestial-container .moon-section {
+        margin-left: auto;
+    }
+
+    .celestial-container .phase-name,
+    .celestial-container .daylight-info {
+        max-width: 70px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .celestial-container .body-visual {
+        padding-top: 4px;
+    }
+
+    .celestial-container .sun-icon,
+    .celestial-container .moon-icon {
+        margin-top: 4px;
+        margin-left: 6px;
+        margin-right: 6px;
+    }
+
+    .celestial-container .body-info {
+        align-items: center;
+    }
+
+    .celestial-container .bearing-readout {
+        margin-left: 0;
+    }
+
+    .eclipse-btn {
+        flex-shrink: 0;
+    }
+}
+
+/* UI Visibility Toggle Button - snug in bottom-left corner */
+.ui-toggle-btn {
+    position: fixed;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(255, 100, 180, 0.5);
+    border: 1px solid rgba(255, 100, 180, 0.6);
+    cursor: pointer;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 220, 240, 0.95);
+    transition: all 0.15s ease;
+    padding: 0;
+    bottom: 4px;
+    left: 4px;
+}
+
+@media (max-width: 500px), (orientation: portrait) and (max-width: 700px) {
+    .ui-toggle-btn {
+        bottom: auto;
+        top: 4px;
+    }
+}
+
+.ui-toggle-btn:hover {
+    background: rgba(255, 100, 180, 0.7);
+    color: #fff;
+}
+
+.ui-toggle-btn .eye-open,
+.ui-toggle-btn .eye-closed {
+    display: none;
+}
+
+.ui-toggle-btn .eye-open {
+    display: block;
+}
+
+.ui-toggle-btn.hidden .eye-open {
+    display: none;
+}
+
+.ui-toggle-btn.hidden .eye-closed {
+    display: block;
+}
+
+.ui-toggle-btn.hidden {
+    background: rgba(100, 100, 100, 0.4);
+    border-color: rgba(150, 150, 150, 0.4);
+    color: rgba(200, 200, 200, 0.8);
+}
+
+/* Hidden state for main UI */
+#position-display.ui-hidden {
+    display: none !important;
+}
+
+/* Right Controls - Zoom Slider */
+#right-controls {
+    position: fixed;
+    right: 10px;
+    top: min(50%, calc(100vh - 360px));
+    transform: translateY(-50%);
+    z-index: 100;
+}
+
+#zoom-slider-container {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 10px 8px;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+}
+
+.zoom-label {
+    font-size: 16px;
+    user-select: none;
+    filter: drop-shadow(0 0 2px rgba(0,0,0,0.8));
+}
+
+.zoom-label-middle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 14px;
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+#zoom-slider {
+    -webkit-appearance: slider-vertical;
+    appearance: slider-vertical;
+    width: 12px;
+    height: 180px;
+    background: transparent;
+    outline: none;
+    cursor: pointer;
+}
+
+#zoom-slider::-webkit-slider-runnable-track {
+    width: 10px;
+    height: 180px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 5px;
+}
+
+/* Pinned mode (default) - hot pink */
+#zoom-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 22px;
+    height: 22px;
+    background: radial-gradient(circle at 30% 30%, #ff88bb, #ff3388 60%, #cc1166);
+    border: 2px solid #ff55aa;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4), inset 0 -2px 4px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,255,255,0.3);
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+/* Unpinned mode - bright red */
+#zoom-slider.unpinned::-webkit-slider-thumb {
+    background: radial-gradient(circle at 30% 30%, #ff6666, #ee2222 60%, #aa0000);
+    border-color: #ff4444;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4), inset 0 -2px 4px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,200,200,0.3);
+}
+
+/* Active/sliding - cyan */
+#zoom-slider.active::-webkit-slider-thumb {
+    background: radial-gradient(circle at 30% 30%, #88ffff, #00dddd 60%, #00aaaa) !important;
+    border-color: #00ffff !important;
+    box-shadow: 0 2px 8px rgba(0,255,255,0.5), inset 0 -2px 4px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,255,255,0.4) !important;
+}
+
+#zoom-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.1);
+    box-shadow: 0 2px 10px rgba(255,100,180,0.6), inset 0 -2px 4px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,255,255,0.3);
+}
+
+#zoom-slider::-moz-range-track {
+    width: 10px;
+    height: 180px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 5px;
+}
+
+/* Pinned mode (default) - hot pink */
+#zoom-slider::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    background: radial-gradient(circle at 30% 30%, #ff88bb, #ff3388 60%, #cc1166);
+    border: 2px solid #ff55aa;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4), inset 0 -2px 4px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,255,255,0.3);
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+/* Unpinned mode - bright red */
+#zoom-slider.unpinned::-moz-range-thumb {
+    background: radial-gradient(circle at 30% 30%, #ff6666, #ee2222 60%, #aa0000);
+    border-color: #ff4444;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4), inset 0 -2px 4px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,200,200,0.3);
+}
+
+/* Active/sliding - cyan */
+#zoom-slider.active::-moz-range-thumb {
+    background: radial-gradient(circle at 30% 30%, #88ffff, #00dddd 60%, #00aaaa) !important;
+    border-color: #00ffff !important;
+    box-shadow: 0 2px 8px rgba(0,255,255,0.5), inset 0 -2px 4px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,255,255,0.4) !important;
+}
+
+#zoom-slider::-moz-range-thumb:hover {
+    transform: scale(1.1);
+    box-shadow: 0 2px 10px rgba(255,100,180,0.6), inset 0 -2px 4px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,255,255,0.3);
+}
