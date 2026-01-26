@@ -8147,28 +8147,30 @@ function updateCelestialContainerPosition() {
     // This function is kept for potential future use but currently does nothing
 }
 
-// UI visibility toggle
-let uiHidden = false;
+// UI visibility toggle - 3 states: 0 = full, 1 = bottom hidden, 2 = all hidden
+let uiVisibilityState = 0;
 
 function setupUIVisibilityToggle() {
     const toggleBtn = document.getElementById('ui-visibility-toggle');
     const positionDisplay = document.getElementById('position-display');
     const celestialTopDisplay = document.getElementById('celestial-top-display');
+    const leftControls = document.getElementById('left-controls');
+    const rightControls = document.getElementById('right-controls');
 
     if (!toggleBtn) return;
 
     toggleBtn.addEventListener('click', () => {
-        uiHidden = !uiHidden;
+        uiVisibilityState = (uiVisibilityState + 1) % 3;
 
-        if (uiHidden) {
-            toggleBtn.classList.add('hidden');
-            positionDisplay.classList.add('ui-hidden');
-            celestialTopDisplay.classList.add('ui-hidden');
-        } else {
-            toggleBtn.classList.remove('hidden');
-            positionDisplay.classList.remove('ui-hidden');
-            celestialTopDisplay.classList.remove('ui-hidden');
-        }
+        // State 0: Full UI visible
+        // State 1: Bottom UI hidden (position-display)
+        // State 2: All UI hidden (bottom + left controls + zoom slider)
+
+        toggleBtn.classList.toggle('hidden', uiVisibilityState >= 1);
+        positionDisplay.classList.toggle('ui-hidden', uiVisibilityState >= 1);
+        celestialTopDisplay.classList.toggle('ui-hidden', uiVisibilityState >= 1);
+        leftControls.classList.toggle('ui-hidden', uiVisibilityState >= 2);
+        rightControls.classList.toggle('ui-hidden', uiVisibilityState >= 2);
     });
 }
 
