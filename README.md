@@ -4,6 +4,7 @@
 
 ---
 
-- Accurate Real-time 3D simulation of Earth, Sun, and Moon from any location on earth, for any time.
+- Accurate Real-time 3D simulation of Earth, Sun, and Moon from any location on earth for any time.
+- Geocentric view of earth visualizes orbital calculations from Swiss Ephemeris.
 - Eclipse penumbra, umbra, antumbra visualized with 3d geometry.
 - Readouts for sunrise, sunset, moonrise, moonset, azimuth, altutude, sun distance, moon distance, moon phase, moon age.
