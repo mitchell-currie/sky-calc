@@ -45,6 +45,10 @@ let umbraCone = null;
 let penumbraCone = null;
 let antumbraCone = null;
 
+// Ghost celestial objects (see-through-earth indicators)
+let ghostSunSprite = null;
+let ghostMoonSprite = null;
+
 // Scene, camera, renderer
 let scene, camera, renderer;
 let earth;
@@ -63,6 +67,9 @@ let sunLight;  // Directional light from sun
 let focusMarker;  // Marker at camera focus point
 let referenceCube;  // Debug cube at Earth center
 
+// Texture loading promise (resolved when Earth textures finish loading)
+let texturesReadyPromise = Promise.resolve();
+
 // View zoom button state
 let toggleViewZoomBtn = null;
 let isZoomedOut = false;
@@ -76,6 +83,7 @@ let southAxisMesh = null;
 // City visibility toggles
 let cityLabelsVisible = true;
 let citySpheresVisible = true;
+let ghostViewEnabled = true;
 
 // City colors (matched to beam colors)
 let sunCityColor = '#ffdd44';   // Default sun beam color
@@ -1945,6 +1953,62 @@ function calculateEclipseConeGeometry(moonDistanceKm, sunDistanceKm) {
         // For calculations
         moonDistanceScene: moonDistanceKm * kmToScene
     };
+}
+
+/**
+ * Create ghost celestial sprites, arc lines, and horizon glow indicators
+ */
+function createGhostCelestials() {
+    // --- Ghost Sun Sprite ---
+    const sunGlowCanvas = document.createElement('canvas');
+    sunGlowCanvas.width = 64;
+    sunGlowCanvas.height = 64;
+    const sunCtx = sunGlowCanvas.getContext('2d');
+    const sunGrad = sunCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    sunGrad.addColorStop(0, 'rgba(255, 255, 230, 0.6)');
+    sunGrad.addColorStop(0.4, 'rgba(255, 250, 220, 0.25)');
+    sunGrad.addColorStop(1, 'rgba(255, 245, 200, 0)');
+    sunCtx.fillStyle = sunGrad;
+    sunCtx.fillRect(0, 0, 64, 64);
+    const sunGlowTexture = new THREE.CanvasTexture(sunGlowCanvas);
+    const sunGlowMaterial = new THREE.SpriteMaterial({
+        map: sunGlowTexture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    ghostSunSprite = new THREE.Sprite(sunGlowMaterial);
+    ghostSunSprite.scale.set(SUN_VISUAL_RADIUS * 6, SUN_VISUAL_RADIUS * 6, 1);
+    ghostSunSprite.visible = false;
+    ghostSunSprite.renderOrder = 999;
+    scene.add(ghostSunSprite);
+
+    // --- Ghost Moon Sprite ---
+    const moonGlowCanvas = document.createElement('canvas');
+    moonGlowCanvas.width = 64;
+    moonGlowCanvas.height = 64;
+    const moonCtx = moonGlowCanvas.getContext('2d');
+    const moonGrad = moonCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    moonGrad.addColorStop(0, 'rgba(180, 200, 255, 0.5)');
+    moonGrad.addColorStop(0.4, 'rgba(140, 170, 255, 0.2)');
+    moonGrad.addColorStop(1, 'rgba(100, 140, 255, 0)');
+    moonCtx.fillStyle = moonGrad;
+    moonCtx.fillRect(0, 0, 64, 64);
+    const moonGlowTexture = new THREE.CanvasTexture(moonGlowCanvas);
+    const moonGlowMaterial = new THREE.SpriteMaterial({
+        map: moonGlowTexture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    ghostMoonSprite = new THREE.Sprite(moonGlowMaterial);
+    ghostMoonSprite.scale.set(MOON_RADIUS * 6, MOON_RADIUS * 6, 1);
+    ghostMoonSprite.visible = false;
+    ghostMoonSprite.renderOrder = 999;
+    scene.add(ghostMoonSprite);
+
 }
 
 /**
@@ -4037,6 +4101,13 @@ function setupLeftControls() {
             });
         });
 
+        // Ghost celestials toggle
+        document.getElementById('toggle-ghost-view')?.addEventListener('click', (e) => {
+            ghostViewEnabled = !ghostViewEnabled;
+            e.currentTarget.classList.toggle('active', ghostViewEnabled);
+            updateGhostVisibility();
+        });
+
     }
 
     // ==================== CITY CAROUSEL ====================
@@ -4498,10 +4569,18 @@ function updateZoomSlider() {
     // 50 = horizon view (CAMERA_MIN_RADIUS, FOV = default) - middle of slider
     // 100 = sky view (CAMERA_MIN_RADIUS, FOV = min/zoomed) - top of slider
 
-    if (cameraRadius > CAMERA_MIN_RADIUS + 10) {
+    // During fall transition, compute effective radius from blend
+    // (cameraRadius stays at transitionStartRadius, but the visual blend moves toward horizon)
+    let effectiveRadius = cameraRadius;
+    if (isViewTransitioning && viewTransitionDirection === 1) {
+        const easedBlend = horizonBlendValue * horizonBlendValue * (3 - 2 * horizonBlendValue);
+        effectiveRadius = transitionStartRadius * (1 - easedBlend) + HORIZON_CAMERA_HEIGHT * easedBlend;
+    }
+
+    if (effectiveRadius > CAMERA_MIN_RADIUS + 10) {
         // In orbital view: map cameraRadius to 0-50
         const range = CAMERA_MAX_RADIUS - CAMERA_MIN_RADIUS;
-        const value = 50 - ((cameraRadius - CAMERA_MIN_RADIUS) / range) * 50;
+        const value = 50 - ((effectiveRadius - CAMERA_MIN_RADIUS) / range) * 50;
         zoomSliderElement.value = Math.max(0, value);
     } else {
         // In horizon/sky view: map camera FOV to 50-100
@@ -4518,17 +4597,59 @@ function setupZoomSlider() {
     zoomSliderElement = document.getElementById('zoom-slider');
     if (!zoomSliderElement) return;
 
-    // Track previous horizon mode state for detecting transitions
-    let wasInHorizonMode = cameraRadius < HORIZON_THRESHOLD;
-
+    // Track previous slider value for detecting transition zone entry
+    let prevSliderValue = null;
     let prevSliderRadius = cameraRadius;
+    const SLIDER_JUMP_THRESHOLD = 4; // Delta above this = click-to-jump, not drag
 
     // Handle slider input
     zoomSliderElement.addEventListener('input', (e) => {
+        if (isViewTransitioning) {
+            // During cinematic transition - snap thumb to animated position
+            updateZoomSlider();
+            return;
+        }
         const sliderValue = parseFloat(e.target.value);
+
+        // Initialize previous value on first input
+        if (prevSliderValue === null) {
+            prevSliderValue = sliderValue;
+        }
 
         // 0-50: orbital to horizon (cameraRadius MAX to MIN)
         // 50-100: horizon to sky view (horizonPitch 0 to max up)
+
+        // Detect click-to-jump vs gradual drag
+        const sliderDelta = Math.abs(sliderValue - prevSliderValue);
+        const isJump = sliderDelta > SLIDER_JUMP_THRESHOLD;
+
+        // --- Transition zone detection (only for gradual drags, not click jumps) ---
+        if (!isJump) {
+            // Zooming in: slider crosses into transition zone from below
+            if (sliderValue >= SLIDER_TRANSITION_START && prevSliderValue < SLIDER_TRANSITION_START && !isHorizonMode) {
+                // Compute radius at transition start point
+                const range = CAMERA_MAX_RADIUS - CAMERA_MIN_RADIUS;
+                const t = SLIDER_TRANSITION_START / 50;
+                cameraRadius = CAMERA_MAX_RADIUS - t * range;
+                prevSliderValue = sliderValue;
+                startViewTransition(1);
+                return;
+            }
+
+            // Zooming out: slider drops from horizon zone (>50) down to ≤50
+            if (sliderValue <= SLIDER_TRANSITION_END && prevSliderValue > SLIDER_TRANSITION_END && isHorizonMode) {
+                // Reset FOV to default before liftoff
+                if (camera.fov !== DEFAULT_FOV) {
+                    camera.fov = DEFAULT_FOV;
+                    camera.updateProjectionMatrix();
+                }
+                prevSliderValue = sliderValue;
+                startViewTransition(-1);
+                return;
+            }
+        }
+
+        prevSliderValue = sliderValue;
 
         if (sliderValue <= 50) {
             // Orbital view: map slider 0-50 to cameraRadius MAX to MIN
@@ -4542,6 +4663,14 @@ function setupZoomSlider() {
                 camera.updateProjectionMatrix();
             }
 
+            // For jumps from horizon to orbital, tear down horizon mode
+            if (isJump && isHorizonMode && cameraRadius > HORIZON_THRESHOLD) {
+                isHorizonMode = false;
+                horizonBlendValue = 0;
+                isZoomedOut = true;
+                updateViewZoomButton();
+            }
+
             // Track active zooming in for pointer alignment
             if (cameraRadius < prevSliderRadius && cameraRadius > HORIZON_THRESHOLD) {
                 isZoomingIn = true;
@@ -4549,32 +4678,28 @@ function setupZoomSlider() {
                 zoomingInTimeout = setTimeout(() => { isZoomingIn = false; }, 150);
             }
             prevSliderRadius = cameraRadius;
-
-            // Check if we just entered horizon mode (crossed the threshold)
-            const nowInHorizonMode = cameraRadius < HORIZON_THRESHOLD;
-
-            // When entering horizon view, point at horizon in target direction (no pitch up)
-            if (nowInHorizonMode && !wasInHorizonMode) {
-                // Failsafe: snap camera to be centered on pointer
-                if (focusLocked) {
-                    cameraRefLat = focusPointLat - dragOffsetLat;
-                    cameraRefLon = focusPointLon - dragOffsetLon;
-                }
-
-                const target = getHorizonEntryTarget();
-                // Start at horizon level facing target direction
-                horizonYaw = target.yaw;
-                horizonPitch = 0;
-            }
-
-            wasInHorizonMode = nowInHorizonMode;
         } else {
             // Sky view: map slider 50-100 to camera FOV (zoom in optically)
             // Keep camera at min radius
             cameraRadius = CAMERA_MIN_RADIUS;
 
+            // For jumps from orbital to sky, set up horizon mode instantly
+            if (isJump && !isHorizonMode) {
+                if (focusLocked) {
+                    cameraRefLat = focusPointLat - dragOffsetLat;
+                    cameraRefLon = focusPointLon - dragOffsetLon;
+                }
+                const target = getHorizonEntryTarget();
+                horizonYaw = target.yaw;
+                horizonPitch = 0;
+                isHorizonMode = true;
+                horizonBlendValue = 1;
+                isZoomedOut = false;
+                updateViewZoomButton();
+            }
+
             // When first entering sky view (slider crosses 50), start looking up animation
-            if (!wasInHorizonMode || camera.fov >= DEFAULT_FOV - 1) {
+            if (!isHorizonMode || camera.fov >= DEFAULT_FOV - 1) {
                 const target = getHorizonEntryTarget();
                 pendingHorizonAnimation = true;
                 pendingTargetYaw = target.yaw;
@@ -4585,8 +4710,6 @@ function setupZoomSlider() {
             const fovRange = DEFAULT_FOV - MIN_FOV;
             camera.fov = DEFAULT_FOV - t * fovRange;
             camera.updateProjectionMatrix();
-
-            wasInHorizonMode = true;
         }
     });
 
@@ -4841,8 +4964,16 @@ const HORIZON_CAMERA_HEIGHT = EARTH_RADIUS + 16;  // Fixed height when in horizo
 let isHorizonMode = false;           // Current mode: false = orbital, true = horizon
 let horizonBlendValue = 0;           // Animated blend value (0 = orbital, 1 = horizon)
 const VIEW_SNAP_SPEED = 8;           // Speed of snap transition
-let horizonZoomAccumulator = 0;      // Accumulated zoom input in horizon mode
-const HORIZON_DEAD_ZONE = 8;         // Number of scroll events before FOV zoom starts
+// Cinematic view transition state
+let isViewTransitioning = false;       // True during fall/liftoff animation
+let viewTransitionProgress = 0;        // 0 to 1
+let viewTransitionDirection = 0;       // 1 = falling in, -1 = blasting off
+let transitionStartRadius = 0;         // Camera radius at transition start
+const FALL_DURATION = 1.0;             // seconds - "forced slow" fall
+const LIFTOFF_DURATION = 0.7;          // seconds - slightly faster blast-off
+const LIFTOFF_EXIT_RADIUS = HORIZON_THRESHOLD + 800; // Where camera ends up after liftoff
+const SLIDER_TRANSITION_START = 45;  // Slider value where transition zone begins (zoom in)
+const SLIDER_TRANSITION_END = 50;    // Slider value where transition zone ends (at horizon)
 
 // Drag state
 let isDragging = false;        // Left-click: move focus point
@@ -5038,6 +5169,9 @@ async function init() {
     // Create eclipse shadow cones (umbra, penumbra, antumbra)
     createEclipseCones();
 
+    // Create ghost celestial sprites, arcs, and horizon glow
+    createGhostCelestials();
+
     // Lighting - dim ambient so dark sides aren't pure black
     const ambientLight = new THREE.AmbientLight(0xb8b8b8, 0.2);
     scene.add(ambientLight);
@@ -5092,6 +5226,10 @@ async function init() {
 
     // Start animation loop
     animate();
+
+    // Hide loading overlay once textures are ready and min display time elapsed
+    await texturesReadyPromise;
+    await hideLoadingOverlay();
 }
 
 function createEarth() {
@@ -5223,24 +5361,34 @@ function createEarth() {
 
     // Load day texture
     const loader = new THREE.TextureLoader();
-    loader.load('natural-earth-no-ice-clouds.jpeg', (texture) => {
-        earthMaterial.map = texture;
-        earthMaterial.color = new THREE.Color(0xBDCCDB); // Green tint
-        earthMaterial.needsUpdate = true;
-        console.log('Day texture loaded');
-    }, undefined, (err) => {
-        console.error('Failed to load day texture:', err);
+    const dayTexturePromise = new Promise((resolve) => {
+        loader.load('natural-earth-no-ice-clouds.jpeg', (texture) => {
+            earthMaterial.map = texture;
+            earthMaterial.color = new THREE.Color(0xBDCCDB); // Green tint
+            earthMaterial.needsUpdate = true;
+            console.log('Day texture loaded');
+            resolve();
+        }, undefined, (err) => {
+            console.error('Failed to load day texture:', err);
+            resolve(); // resolve anyway so overlay still hides
+        });
     });
 
     // Load elevation/displacement map
-    loader.load('earth-elevation.jpg', (texture) => {
-        earthMaterial.displacementMap = texture;
-        earthMaterial.displacementScale = 5;  // Exaggerated for visibility (real would be ~8 units)
-        earthMaterial.needsUpdate = true;
-        console.log('Elevation map loaded');
-    }, undefined, (err) => {
-        console.error('Failed to load elevation map:', err);
+    const elevTexturePromise = new Promise((resolve) => {
+        loader.load('earth-elevation.jpg', (texture) => {
+            earthMaterial.displacementMap = texture;
+            earthMaterial.displacementScale = 5;  // Exaggerated for visibility (real would be ~8 units)
+            earthMaterial.needsUpdate = true;
+            console.log('Elevation map loaded');
+            resolve();
+        }, undefined, (err) => {
+            console.error('Failed to load elevation map:', err);
+            resolve(); // resolve anyway so overlay still hides
+        });
     });
+
+    texturesReadyPromise = Promise.all([dayTexturePromise, elevTexturePromise]);
 
     // Create shadow-casting sphere for Earth (for solar/lunar eclipses)
     // Uses a fully transparent material but still casts shadows
@@ -5523,6 +5671,7 @@ function createFocusMarker() {
         polygonOffsetUnits: 1
     });
     const spotOutline = new THREE.Mesh(spotOutlineGeometry, spotOutlineMaterial);
+    spotOutline.renderOrder = 100;
     scene.add(spotOutline);
 
     // Spot fill (matches pointer color)
@@ -5532,11 +5681,13 @@ function createFocusMarker() {
         transparent: true,
         opacity: 0.9,
         side: THREE.DoubleSide,
+        depthWrite: false,
         polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2
     });
     const spotFill = new THREE.Mesh(spotFillGeometry, spotFillMaterial);
+    spotFill.renderOrder = 101;
     scene.add(spotFill);
 
     // Create compass rose for horizon view (same size as spot)
@@ -5552,9 +5703,11 @@ function createFocusMarker() {
         color: 0x222222,
         transparent: true,
         opacity: 0.9,
-        side: THREE.DoubleSide
+        side: THREE.DoubleSide,
+        depthWrite: false
     });
     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+    ring.renderOrder = 102;
     compassGroup.add(ring);
 
     // Degree ticks on outer ring
@@ -5580,6 +5733,7 @@ function createFocusMarker() {
         tick.position.y = Math.cos(angle) * (ringOuterRadius - tickLength / 2 - 1);
         tick.position.z = 0.15;
         tick.rotation.z = -angle;
+        tick.renderOrder = 103;
         compassGroup.add(tick);
     }
 
@@ -5589,21 +5743,25 @@ function createFocusMarker() {
         color: 0x888888,
         transparent: true,
         opacity: 0.5,
-        side: THREE.DoubleSide
+        side: THREE.DoubleSide,
+        depthWrite: false
     });
     const innerFill = new THREE.Mesh(innerFillGeometry, compassFillMaterial);
     innerFill.position.z = -0.1;
+    innerFill.renderOrder = 102;
     compassGroup.add(innerFill);
 
     // Sun direction line - added to scene directly for proper renderOrder
     const sunLineGeometry = new THREE.PlaneGeometry(4, ringInnerRadius * 0.9);
     const sunLineMaterial = new THREE.MeshBasicMaterial({
         color: 0xffdd44,
-        side: THREE.DoubleSide
+        side: THREE.DoubleSide,
+        depthWrite: false
     });
     const sunLine = new THREE.Mesh(sunLineGeometry, sunLineMaterial);
     sunLine.position.y = ringInnerRadius * 0.45;  // Offset to start from center
     sunLine.position.z = 1;  // Small offset toward camera to be in front of spot
+    sunLine.renderOrder = 104;
     const sunLineGroup = new THREE.Group();
     sunLineGroup.visible = false;
     sunLineGroup.add(sunLine);
@@ -5613,11 +5771,13 @@ function createFocusMarker() {
     const moonLineGeometry = new THREE.PlaneGeometry(3, ringInnerRadius * 0.9);
     const moonLineMaterial = new THREE.MeshBasicMaterial({
         color: 0x8899ff,
-        side: THREE.DoubleSide
+        side: THREE.DoubleSide,
+        depthWrite: false
     });
     const moonLine = new THREE.Mesh(moonLineGeometry, moonLineMaterial);
     moonLine.position.y = ringInnerRadius * 0.45;
     moonLine.position.z = 0.5;  // Small offset toward camera
+    moonLine.renderOrder = 104;
     const moonLineGroup = new THREE.Group();
     moonLineGroup.visible = false;
     moonLineGroup.add(moonLine);
@@ -5991,6 +6151,112 @@ function updateCelestialPositions() {
     currentMoonDir = latLonToDirection(moonPos.lat, moonPos.lon);
 }
 
+// ==================== GHOST CELESTIALS SYSTEM ====================
+
+/**
+ * Check if a celestial body is occluded by Earth from the camera's perspective.
+ * Returns { occluded: boolean, altitude: number (radians, negative = below horizon) }
+ */
+// Horizon dip angle: from camera height, the visible horizon is below geometric horizon
+const HORIZON_DIP_ANGLE = -Math.acos(EARTH_RADIUS / HORIZON_CAMERA_HEIGHT); // ~-4.18 degrees
+
+function getGhostOcclusion(bodyWorldPos, bodyLatLon) {
+    // Horizon view: altitude-based check, accounting for camera height dip
+    if (horizonBlendValue > 0.5) {
+        const focusLatRad = focusPointLat * Math.PI / 180;
+        const focusLonRad = focusPointLon * Math.PI / 180;
+        const bodyLatRad = bodyLatLon.lat * Math.PI / 180;
+        const bodyLonRad = bodyLatLon.lon * Math.PI / 180;
+        const dLon = bodyLonRad - focusLonRad;
+        const sinLat1 = Math.sin(focusLatRad);
+        const cosLat1 = Math.cos(focusLatRad);
+        const sinLat2 = Math.sin(bodyLatRad);
+        const cosLat2 = Math.cos(bodyLatRad);
+        const altitude = Math.asin(sinLat1 * sinLat2 + cosLat1 * cosLat2 * Math.cos(dLon));
+        return { occluded: altitude < HORIZON_DIP_ANGLE, altitude: altitude };
+    }
+
+    // Orbital view: ray-sphere intersection
+    const camPos = camera.position;
+    const dir = new THREE.Vector3().subVectors(bodyWorldPos, camPos);
+    const bodyDist = dir.length();
+    dir.normalize();
+
+    // Ray-sphere intersection: sphere at origin with radius EARTH_RADIUS
+    const oc = camPos.clone(); // origin - center (center is 0,0,0)
+    const a = dir.dot(dir); // always 1 for normalized dir
+    const b = 2.0 * oc.dot(dir);
+    const c = oc.dot(oc) - EARTH_RADIUS * EARTH_RADIUS;
+    const discriminant = b * b - 4 * a * c;
+
+    if (discriminant > 0) {
+        const sqrtD = Math.sqrt(discriminant);
+        const t1 = (-b - sqrtD) / (2 * a);
+        const t2 = (-b + sqrtD) / (2 * a);
+        // Occluded if sphere intersection is between camera and body
+        if (t1 > 0 && t1 < bodyDist) {
+            // Compute approximate altitude for opacity scaling
+            const bodyDir = bodyWorldPos.clone().normalize();
+            const focusDir = latLonToDirection(focusPointLat, focusPointLon);
+            const dotProd = bodyDir.dot(focusDir);
+            const altitude = Math.asin(Math.max(-1, Math.min(1, dotProd))) - Math.PI / 2;
+            return { occluded: true, altitude: altitude };
+        }
+    }
+    return { occluded: false, altitude: Math.PI / 4 }; // Not occluded, positive altitude
+}
+
+/**
+ * Master ghost visibility toggle (called when button is clicked)
+ */
+function updateGhostVisibility() {
+    if (!ghostViewEnabled) {
+        if (ghostSunSprite) ghostSunSprite.visible = false;
+        if (ghostMoonSprite) ghostMoonSprite.visible = false;
+    }
+}
+
+/**
+ * Per-frame ghost celestials update — called in animate loop
+ */
+function updateGhostCelestials() {
+    if (!ghostViewEnabled) {
+        if (ghostSunSprite) ghostSunSprite.visible = false;
+        if (ghostMoonSprite) ghostMoonSprite.visible = false;
+        return;
+    }
+    if (isViewTransitioning) return;
+
+    const simTime = getAbsoluteSimulatedTime();
+    const sunPos = getSunPosition(simTime);
+    const moonPos = getMoonPosition(simTime);
+
+    // --- Ghost Sun Sprite ---
+    if (ghostSunSprite && sunMesh) {
+        ghostSunSprite.position.copy(sunMesh.position);
+        const sunOcc = getGhostOcclusion(sunMesh.position, sunPos);
+        if (sunOcc.occluded) {
+            ghostSunSprite.material.opacity = 0.7;
+            ghostSunSprite.visible = true;
+        } else {
+            ghostSunSprite.visible = false;
+        }
+    }
+
+    // --- Ghost Moon Sprite ---
+    if (ghostMoonSprite && moonMesh) {
+        ghostMoonSprite.position.copy(moonMesh.position);
+        const moonOcc = getGhostOcclusion(moonMesh.position, moonPos);
+        if (moonOcc.occluded) {
+            ghostMoonSprite.material.opacity = 0.5;
+            ghostMoonSprite.visible = true;
+        } else {
+            ghostMoonSprite.visible = false;
+        }
+    }
+
+}
+
 // City marker system - uses CITIES array from top
 const cityMarkers = [];  // THREE.js sphere meshes
 let hoveredCity = null;  // Currently hovered city marker (both marker and label highlight together)
@@ -6088,17 +6354,18 @@ function plotCities() {
         scene.add(labelSprite);
         marker.userData.labelSprite = labelSprite;
 
-        // Create signpost pole (3D cylinder) connecting marker to label
-        const poleGeometry = new THREE.CylinderGeometry(0.3, 0.3, 1, 6);  // Thin pole, will be scaled
-        const poleMaterial = new THREE.MeshBasicMaterial({
+        // Create connector line linking label to marker (replaces cylinder poles)
+        const lineGeometry = new THREE.BufferGeometry();
+        const lineMaterial = new THREE.LineBasicMaterial({
             color: 0xffffff,
             transparent: true,
-            opacity: 0.8
+            opacity: 0.4
         });
-        const signpostPole = new THREE.Mesh(poleGeometry, poleMaterial);
-        signpostPole.visible = false;
-        scene.add(signpostPole);
-        marker.userData.signpostPole = signpostPole;
+        const connectorLine = new THREE.Line(lineGeometry, lineMaterial);
+        connectorLine.visible = false;
+        connectorLine.renderOrder = 199;  // Just below labels
+        scene.add(connectorLine);
+        marker.userData.connectorLine = connectorLine;
     });
 
     // Set up mouse event listeners for city interaction
@@ -6264,6 +6531,9 @@ function setupCityInteraction() {
         const dx = e.clientX - mouseDownX;
         const dy = e.clientY - mouseDownY;
         if (Math.sqrt(dx * dx + dy * dy) > CLICK_THRESHOLD) return;
+
+        // Skip if click was on the pointer (handled by pointer toggle handler)
+        if (focusMarker && focusMarker.userData.isHovered) return;
 
         // If clicked on a city, navigate to it
         if (hoveredCity && hoveredCity.userData.city) {
@@ -6729,7 +6999,7 @@ function updateFocusHighlight() {
         // Hide arrow (frustum) when in horizon mode
         const arrow = focusMarker.userData.arrow;
         if (arrow) {
-            arrow.visible = horizonBlendValue < 0.5;
+            arrow.visible = !isViewTransitioning && horizonBlendValue < 0.3;
         }
 
         // Fade slightly when partially in horizon mode (skip pointer compass materials)
@@ -6752,7 +7022,7 @@ function updateFocusHighlight() {
             // Position on Earth's surface below the pointer
             const spotPos = latLonToCartesian(focusPointLat, focusPointLon, EARTH_RADIUS + SPOT_POS_RAISE);
             spotOutline.position.copy(spotPos);
-            spotFill.position.copy(spotPos);
+            spotFill.position.copy(latLonToCartesian(focusPointLat, focusPointLon, EARTH_RADIUS + SPOT_POS_RAISE + 1));
 
             // Orient to face outward from Earth
             spotOutline.lookAt(0, 0, 0);
@@ -6798,7 +7068,7 @@ function updateFocusHighlight() {
             }
 
             // Show compass in horizon view, hide regular spot
-            const inHorizon = horizonBlendValue > 0.3;
+            const inHorizon = isViewTransitioning || horizonBlendValue > 0.3;
             if (compassGroup) {
                 compassGroup.visible = inHorizon;
 
@@ -6827,7 +7097,7 @@ function updateFocusHighlight() {
                 }
 
                 // Fade spot out in horizon view
-                const spotOpacity = inHorizon ? Math.max(0, 1 - horizonBlendValue * 2) : 0.9;
+                const spotOpacity = isViewTransitioning ? 0 : (inHorizon ? Math.max(0, 1 - horizonBlendValue * 3.33) : 0.9);
                 spotFill.material.opacity = spotOpacity;
                 spotOutline.material.opacity = spotOpacity;
                 spotFill.visible = spotOpacity > 0.01;
@@ -6837,7 +7107,7 @@ function updateFocusHighlight() {
             // Update pointer compass (on cone base) - show when not in horizon view
             const { pointerCompassGroup, pSunLineGroup, pMoonLineGroup } = focusMarker.userData;
             if (pointerCompassGroup) {
-                pointerCompassGroup.visible = horizonBlendValue < 0.7;
+                pointerCompassGroup.visible = !isViewTransitioning && horizonBlendValue < 0.3;
 
                 if (pointerCompassGroup.visible) {
                     // Transform compass orientation into focusMarker's local space
@@ -6868,7 +7138,7 @@ function updateCompass() {
     if (!compass) return;
 
     // Show/hide based on horizon mode
-    if (horizonBlendValue > 0.5) {
+    if (isViewTransitioning || horizonBlendValue > 0.1) {
         compass.classList.add('visible');
         document.body.classList.add('horizon-mode');
     } else {
@@ -6986,10 +7256,108 @@ function updateCompass() {
 }
 
 /**
+ * Start a cinematic view transition (fall to Earth or liftoff to space)
+ * @param {number} direction - 1 for falling in, -1 for blasting off
+ */
+function startViewTransition(direction) {
+    if (isViewTransitioning) return;
+
+    isViewTransitioning = true;
+    viewTransitionProgress = 0;
+    viewTransitionDirection = direction;
+    transitionStartRadius = cameraRadius;
+
+    if (direction === 1) {
+        // FALLING IN - set up horizon entry
+        // Snap camera to be centered on pointer
+        if (focusLocked) {
+            cameraRefLat = focusPointLat - dragOffsetLat;
+            cameraRefLon = focusPointLon - dragOffsetLon;
+        }
+
+        // Set horizon entry yaw/pitch
+        const target = getHorizonEntryTarget();
+        horizonYaw = target.yaw;
+        horizonPitch = 0;
+
+        // Set isHorizonMode early so setCameraFromSpherical blend path works
+        isHorizonMode = true;
+        isZoomedOut = false;
+        updateViewZoomButton();
+    }
+
+}
+
+/**
+ * Update cinematic view transition animation each frame
+ * @param {number} delta - Frame delta time in seconds
+ */
+function updateViewTransition(delta) {
+    if (!isViewTransitioning) return;
+
+    const duration = viewTransitionDirection === 1 ? FALL_DURATION : LIFTOFF_DURATION;
+    viewTransitionProgress += delta / duration;
+
+    if (viewTransitionProgress >= 1) {
+        viewTransitionProgress = 1;
+    }
+
+    // Ease-in-out cubic
+    const t = viewTransitionProgress;
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+    if (viewTransitionDirection === 1) {
+        // FALLING IN - horizonBlendValue drives the radius blend in setCameraFromSpherical
+        // Keep cameraRadius at start value; the blend lerps effective radius to HORIZON_CAMERA_HEIGHT
+        horizonBlendValue = eased;
+    } else {
+        // BLASTING OFF - animate cameraRadius outward while blend fades
+        cameraRadius = CAMERA_MIN_RADIUS + (LIFTOFF_EXIT_RADIUS - CAMERA_MIN_RADIUS) * eased;
+        horizonBlendValue = 1 - eased;
+    }
+
+    // Update zoom slider to track animated position
+    updateZoomSlider();
+
+    // Check if transition is complete
+    if (viewTransitionProgress >= 1) {
+        if (viewTransitionDirection === 1) {
+            // Fall complete
+            horizonBlendValue = 1;
+            isHorizonMode = true;
+            cameraRadius = CAMERA_MIN_RADIUS;
+
+            // If sun/moon lock is active, smoothly animate to look at target
+            if (zoomTargetMode !== 2) {
+                const target = getHorizonEntryTarget();
+                animationStartYaw = horizonYaw;
+                animationStartPitch = horizonPitch;
+                targetYaw = target.yaw;
+                targetPitch = target.pitch;
+                animationProgress = 0;
+                isAnimatingToTarget = true;
+            }
+        } else {
+            // Liftoff complete
+            horizonBlendValue = 0;
+            isHorizonMode = false;
+            cameraRadius = LIFTOFF_EXIT_RADIUS;
+            isZoomedOut = true;
+            updateViewZoomButton();
+        }
+
+        isViewTransitioning = false;
+        updateZoomSlider();
+    }
+}
+
+/**
  * Update the view mode based on zoom level and animate the transition
  * Called every frame from animate()
  */
 function updateViewMode(delta) {
+    // During cinematic transitions, skip normal mode switching - transition controls everything
+    if (isViewTransitioning) return;
     // Check if we should switch modes based on threshold
     const shouldBeHorizon = cameraRadius < HORIZON_THRESHOLD;
 
@@ -7369,7 +7737,7 @@ function setupOrbitControls() {
         });
 
         const intersects = raycaster.intersectObjects(pointerMeshes, false);
-        const isHovered = intersects.length > 0;
+        const isHovered = !isViewTransitioning && intersects.length > 0;
 
         if (isHovered !== focusMarker.userData.isHovered) {
             focusMarker.userData.isHovered = isHovered;
@@ -7398,6 +7766,8 @@ function setupOrbitControls() {
     // Zoom with mouse wheel
     canvas.addEventListener('wheel', (e) => {
         e.preventDefault();
+        if (isViewTransitioning) return;  // Block all zoom during cinematic transition
+
         const zoomSpeed = 500;  // Scaled for larger Earth
         const wasAtMin = cameraRadius <= CAMERA_MIN_RADIUS + 10;
         const wasInHorizonMode = cameraRadius < HORIZON_THRESHOLD;
@@ -7407,35 +7777,34 @@ function setupOrbitControls() {
         if (wasAtMin && wasInHorizonMode) {
             const fovSpeed = 3;
             if (zoomingIn) {
-                // Dead zone - accumulate zoom input before starting FOV zoom
-                if (horizonZoomAccumulator < HORIZON_DEAD_ZONE) {
-                    horizonZoomAccumulator++;
-                } else {
-                    // Zoom in - decrease FOV and trigger look-up animation
-                    const prevFov = camera.fov;
-                    camera.fov = Math.max(MIN_FOV, camera.fov - fovSpeed);
+                // Zoom in - decrease FOV and trigger look-up animation
+                const prevFov = camera.fov;
+                camera.fov = Math.max(MIN_FOV, camera.fov - fovSpeed);
 
-                    // Start looking up at sun/moon when zooming in past horizon (only if locked)
-                    if (prevFov >= DEFAULT_FOV - 1 && !isAnimatingToTarget && zoomTargetMode !== 2) {
-                        const target = getHorizonEntryTarget();
-                        pendingHorizonAnimation = true;
-                        pendingTargetYaw = target.yaw;
-                        pendingTargetPitch = target.pitch;
-                    }
+                // Start looking up at sun/moon when zooming in past horizon (only if locked)
+                if (prevFov >= DEFAULT_FOV - 1 && !isAnimatingToTarget && zoomTargetMode !== 2) {
+                    const target = getHorizonEntryTarget();
+                    pendingHorizonAnimation = true;
+                    pendingTargetYaw = target.yaw;
+                    pendingTargetPitch = target.pitch;
                 }
             } else {
-                // Zoom out - decrease accumulator first, then FOV, then exit
-                if (horizonZoomAccumulator > 0 && camera.fov >= DEFAULT_FOV) {
-                    horizonZoomAccumulator--;
-                } else if (camera.fov < DEFAULT_FOV) {
+                // Zoom out - increase FOV first, then trigger liftoff transition
+                if (camera.fov < DEFAULT_FOV) {
                     camera.fov = Math.min(DEFAULT_FOV, camera.fov + fovSpeed);
                 } else {
-                    // FOV is back to default and accumulator is 0, now allow radius to increase
-                    cameraRadius += zoomSpeed;
+                    // FOV is back to default, trigger liftoff transition
+                    startViewTransition(-1);
                 }
             }
             camera.updateProjectionMatrix();
         } else {
+            // Orbital zoom - check if zooming in would cross threshold
+            if (zoomingIn && cameraRadius >= HORIZON_THRESHOLD && cameraRadius - zoomSpeed < HORIZON_THRESHOLD) {
+                // Would cross threshold - trigger cinematic fall instead
+                startViewTransition(1);
+                return;
+            }
             cameraRadius += zoomingIn ? -zoomSpeed : zoomSpeed;
         }
         cameraRadius = THREE.MathUtils.clamp(cameraRadius, CAMERA_MIN_RADIUS, CAMERA_MAX_RADIUS);
@@ -7451,24 +7820,6 @@ function setupOrbitControls() {
             isZoomingIn = true;
             clearTimeout(zoomingInTimeout);
             zoomingInTimeout = setTimeout(() => { isZoomingIn = false; }, 150);
-        }
-
-        // Check if we just entered horizon mode
-        const nowInHorizonMode = cameraRadius < HORIZON_THRESHOLD;
-        if (nowInHorizonMode && !wasInHorizonMode && zoomingIn) {
-            // Reset dead zone accumulator
-            horizonZoomAccumulator = 0;
-
-            // Failsafe: snap camera to be centered on pointer
-            if (focusLocked) {
-                cameraRefLat = focusPointLat - dragOffsetLat;
-                cameraRefLon = focusPointLon - dragOffsetLon;
-            }
-
-            // Point at horizon in target direction (no pitch up yet)
-            const target = getHorizonEntryTarget();
-            horizonYaw = target.yaw;
-            horizonPitch = 0;
         }
 
         updateZoomSlider();
@@ -7704,6 +8055,8 @@ function setupOrbitControls() {
             }
         } else if (e.touches.length === 2) {
             // Two finger pinch - zoom
+            if (isViewTransitioning) { return; }  // Block during cinematic transition
+
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             const distance = Math.sqrt(dx * dx + dy * dy);
@@ -7719,33 +8072,34 @@ function setupOrbitControls() {
                 if (wasAtMin && wasInHorizonMode) {
                     const fovSpeed = Math.abs(delta) * 0.1;
                     if (zoomingIn) {
-                        // Dead zone - accumulate zoom input before starting FOV zoom
-                        if (horizonZoomAccumulator < HORIZON_DEAD_ZONE) {
-                            horizonZoomAccumulator += 0.5;  // Touch pinch accumulates slower
-                        } else {
-                            const prevFov = camera.fov;
-                            camera.fov = Math.max(MIN_FOV, camera.fov - fovSpeed);
+                        // Zoom in - decrease FOV and trigger look-up animation
+                        const prevFov = camera.fov;
+                        camera.fov = Math.max(MIN_FOV, camera.fov - fovSpeed);
 
-                            // Start looking up at sun/moon when zooming in past horizon (only if locked)
-                            if (prevFov >= DEFAULT_FOV - 1 && !isAnimatingToTarget && zoomTargetMode !== 2) {
-                                const target = getHorizonEntryTarget();
-                                pendingHorizonAnimation = true;
-                                pendingTargetYaw = target.yaw;
-                                pendingTargetPitch = target.pitch;
-                            }
+                        // Start looking up at sun/moon when zooming in past horizon (only if locked)
+                        if (prevFov >= DEFAULT_FOV - 1 && !isAnimatingToTarget && zoomTargetMode !== 2) {
+                            const target = getHorizonEntryTarget();
+                            pendingHorizonAnimation = true;
+                            pendingTargetYaw = target.yaw;
+                            pendingTargetPitch = target.pitch;
                         }
                     } else {
-                        // Zoom out - decrease accumulator first, then FOV, then exit
-                        if (horizonZoomAccumulator > 0 && camera.fov >= DEFAULT_FOV) {
-                            horizonZoomAccumulator -= 0.5;
-                        } else if (camera.fov < DEFAULT_FOV) {
+                        // Zoom out - increase FOV first, then trigger liftoff transition
+                        if (camera.fov < DEFAULT_FOV) {
                             camera.fov = Math.min(DEFAULT_FOV, camera.fov + fovSpeed);
                         } else {
-                            cameraRadius += Math.abs(delta);
+                            // FOV is back to default, trigger liftoff transition
+                            startViewTransition(-1);
                         }
                     }
                     camera.updateProjectionMatrix();
                 } else {
+                    // Orbital zoom - check if zooming in would cross threshold
+                    if (zoomingIn && cameraRadius >= HORIZON_THRESHOLD && cameraRadius + delta < HORIZON_THRESHOLD) {
+                        startViewTransition(1);
+                        lastTouchDistance = distance;
+                        return;
+                    }
                     cameraRadius += delta;
                 }
                 cameraRadius = THREE.MathUtils.clamp(cameraRadius, CAMERA_MIN_RADIUS, CAMERA_MAX_RADIUS);
@@ -7761,24 +8115,6 @@ function setupOrbitControls() {
                     isZoomingIn = true;
                     clearTimeout(zoomingInTimeout);
                     zoomingInTimeout = setTimeout(() => { isZoomingIn = false; }, 150);
-                }
-
-                // Check if we just entered horizon mode
-                const nowInHorizonMode = cameraRadius < HORIZON_THRESHOLD;
-                if (nowInHorizonMode && !wasInHorizonMode && zoomingIn) {
-                    // Reset dead zone accumulator
-                    horizonZoomAccumulator = 0;
-
-                    // Failsafe: snap camera to be centered on pointer
-                    if (focusLocked) {
-                        cameraRefLat = focusPointLat - dragOffsetLat;
-                        cameraRefLon = focusPointLon - dragOffsetLon;
-                    }
-
-                    // Point at horizon in target direction (no pitch up yet)
-                    const target = getHorizonEntryTarget();
-                    horizonYaw = target.yaw;
-                    horizonPitch = 0;
                 }
 
                 updateZoomSlider();
@@ -8086,12 +8422,15 @@ function animate() {
         }
     }
 
-    // Continuously track sun/moon when locked in horizon mode
-    if (isHorizonMode && zoomTargetMode !== 2 && !isAnimatingToTarget) {
+    // Continuously track sun/moon when locked in horizon mode (skip during transition)
+    if (isHorizonMode && zoomTargetMode !== 2 && !isAnimatingToTarget && !isViewTransitioning) {
         const target = getHorizonEntryTarget();
         horizonYaw = target.yaw;
         horizonPitch = target.pitch;
     }
+
+    // Update cinematic view transition (fall/liftoff animation)
+    updateViewTransition(delta);
 
     // Update view mode state (handles smooth snap transition between orbital/horizon)
     updateViewMode(delta);
@@ -8113,6 +8452,9 @@ function animate() {
 
     // Update sun and moon positions (real-time)
     updateCelestialPositions();
+
+    // Update ghost celestial indicators (through-earth visibility)
+    updateGhostCelestials();
 
     // Update focus highlight position on sphere
     updateFocusHighlight();
@@ -8172,6 +8514,23 @@ function setupUIVisibilityToggle() {
         leftControls.classList.toggle('ui-hidden', uiVisibilityState >= 2);
         rightControls.classList.toggle('ui-hidden', uiVisibilityState >= 2);
     });
+}
+
+// Loading overlay (animation is pure CSS — see style.css)
+const loadingStartTime = performance.now();
+
+async function hideLoadingOverlay() {
+    // Ensure overlay shows for at least 2s so messages cycle visibly
+    const elapsed = performance.now() - loadingStartTime;
+    const minDisplayTime = 2000;
+    if (elapsed < minDisplayTime) {
+        await new Promise(r => setTimeout(r, minDisplayTime - elapsed));
+    }
+    const overlay = document.getElementById('loading-overlay');
+    if (overlay) {
+        overlay.classList.add('loading-hidden');
+        setTimeout(() => overlay.remove(), 600);
+    }
 }
 
 // Initialize when DOM is loaded

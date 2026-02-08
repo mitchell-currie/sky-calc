@@ -3,16 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sky Calc</title>
-    <link rel="stylesheet" href="style.css?v=241">
+    <title>Where is Moon?</title>
+    <link rel="stylesheet" href="style.css?v=244">
 </head>
 <body>
+    <div id="loading-overlay">
+        <div class="loading-msg">Calculating sunrise</div>
+        <div class="loading-msg">Aligning celestial spheres</div>
+        <div class="loading-msg">Consulting ephemeris tables</div>
+        <div class="loading-msg">Calibrating star charts</div>
+        <div class="loading-msg">Triangulating lunar nodes</div>
+        <div class="loading-msg">Unfolding star maps</div>
+        <div class="loading-msg">Winding the orrery</div>
+    </div>
+    <script>!function(){var o=document.getElementById('loading-overlay'),m=[...o.children];for(var i=m.length-1;i>0;i--){var j=Math.random()*i+1|0;o.appendChild(m[j]);var t=m[i];m[i]=m[j];m[j]=t}}()</script>
+
     <div id="container"></div>
 
     <div id="left-controls">
         <button id="toggle-focus-lock" title="Toggle pin mode"></button>
         <button id="toggle-city-labels" title="Toggle city labels" class="active">🏷️</button>
         <button id="toggle-city-spheres" title="Toggle city spheres" class="active">💡</button>
+        <button id="toggle-ghost-view" title="Toggle ghost celestials" class="active">🔮</button>
         <button id="toggle-earth-settings" title="Appearance">🌐</button>
     </div>
 
@@ -300,6 +312,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script type="module" src="main.js?v=293"></script>
+    <script type="module" src="main.js?v=305"></script>
 </body>
 </html>
