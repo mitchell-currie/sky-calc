@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Where is Moon?</title>
-    <link rel="stylesheet" href="style.css?v=244">
+    <link rel="stylesheet" href="style.css?v=248">
 </head>
 <body>
     <div id="loading-overlay">
@@ -24,16 +24,25 @@
         <button id="toggle-focus-lock" title="Toggle pin mode"></button>
         <button id="toggle-city-labels" title="Toggle city labels" class="active">🏷️</button>
         <button id="toggle-city-spheres" title="Toggle city spheres" class="active">💡</button>
-        <button id="toggle-ghost-view" title="Toggle ghost celestials" class="active">🔮</button>
+        <button id="toggle-ghost-view" title="See sun/moon through Earth" class="active">✨</button>
+        <button id="toggle-celestial-trails" title="Show sun/moon trail" class="active">🌀</button>
         <button id="toggle-earth-settings" title="Appearance">🌐</button>
     </div>
 
     <div id="right-controls">
         <div id="zoom-slider-container">
             <div class="zoom-label">🔭</div>
-            <input type="range" id="zoom-slider" min="0" max="100" value="0" step="1" orient="vertical">
-            <div class="zoom-label zoom-label-middle">🌅</div>
+            <div id="custom-zoom-slider">
+                <div id="slider-sky-track" class="slider-track"></div>
+                <div id="slider-bridge" class="orbital">
+                    <span id="bridge-label-horizon" class="bridge-label">HORIZON</span>
+                    <span id="bridge-label-orbital" class="bridge-label">ORBITAL</span>
+                </div>
+                <div id="slider-orbital-track" class="slider-track"></div>
+                <div id="slider-thumb"></div>
+            </div>
             <div class="zoom-label">🌍</div>
+            <div id="slider-readout"></div>
         </div>
     </div>
 
@@ -312,6 +321,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script type="module" src="main.js?v=305"></script>
+    <script type="module" src="main.js?v=313"></script>
 </body>
 </html>

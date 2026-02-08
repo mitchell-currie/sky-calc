@@ -72,7 +72,6 @@ let texturesReadyPromise = Promise.resolve();
 
 // View zoom button state
 let toggleViewZoomBtn = null;
-let isZoomedOut = false;
 
 // Grid lines (equator, meridian, polar axis)
 let equatorLine = null;
@@ -84,6 +83,14 @@ let southAxisMesh = null;
 let cityLabelsVisible = true;
 let citySpheresVisible = true;
 let ghostViewEnabled = true;
+let celestialTrailsEnabled = true;
+
+// Celestial trail constants
+const TRAIL_POINT_COUNT = 48;           // one every 30 min for 24h
+
+// Celestial trail sprite arrays
+let sunTrailSprites = [];
+let moonTrailSprites = [];
 
 // City colors (matched to beam colors)
 let sunCityColor = '#ffdd44';   // Default sun beam color
@@ -1779,6 +1786,27 @@ function createMoon() {
     moonMesh.receiveShadow = true; // Receives shadow from Earth (lunar eclipse)
     scene.add(moonMesh);
 
+    // Moon glow sprite (purely visual, additive blending — no lighting/shadow effect)
+    const moonGlowCanvas = document.createElement('canvas');
+    moonGlowCanvas.width = 128;
+    moonGlowCanvas.height = 128;
+    const mgCtx = moonGlowCanvas.getContext('2d');
+    const mgGrad = mgCtx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    mgGrad.addColorStop(0, 'rgba(200, 220, 255, 0.7)');
+    mgGrad.addColorStop(0.2, 'rgba(180, 200, 255, 0.35)');
+    mgGrad.addColorStop(0.5, 'rgba(150, 180, 255, 0.1)');
+    mgGrad.addColorStop(1, 'rgba(120, 150, 255, 0)');
+    mgCtx.fillStyle = mgGrad;
+    mgCtx.fillRect(0, 0, 128, 128);
+    const moonGlowSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: new THREE.CanvasTexture(moonGlowCanvas),
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    }));
+    moonGlowSprite.scale.set(MOON_RADIUS * 6, MOON_RADIUS * 6, 1);
+    moonMesh.add(moonGlowSprite);
+
     // Create debug line from Earth center to Moon
     const lineGeometry = new THREE.BufferGeometry();
     const positions = new Float32Array(6);  // 2 points * 3 coordinates
@@ -1876,6 +1904,27 @@ function createSun() {
     sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
     scene.add(sunMesh);
 
+    // Sun glow sprite (purely visual, additive blending — no lighting/shadow effect)
+    const sunGlowCanvas = document.createElement('canvas');
+    sunGlowCanvas.width = 128;
+    sunGlowCanvas.height = 128;
+    const sgCtx = sunGlowCanvas.getContext('2d');
+    const sgGrad = sgCtx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    sgGrad.addColorStop(0, 'rgba(255, 255, 230, 0.9)');
+    sgGrad.addColorStop(0.2, 'rgba(255, 245, 200, 0.5)');
+    sgGrad.addColorStop(0.5, 'rgba(255, 230, 150, 0.15)');
+    sgGrad.addColorStop(1, 'rgba(255, 220, 100, 0)');
+    sgCtx.fillStyle = sgGrad;
+    sgCtx.fillRect(0, 0, 128, 128);
+    const sunGlowSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: new THREE.CanvasTexture(sunGlowCanvas),
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    }));
+    sunGlowSprite.scale.set(SUN_VISUAL_RADIUS * 6, SUN_VISUAL_RADIUS * 6, 1);
+    sunMesh.add(sunGlowSprite);
+
     // Create debug line from Earth center to Sun (green)
     const lineGeometry = new THREE.BufferGeometry();
     const positions = new Float32Array(6);  // 2 points * 3 coordinates
@@ -1965,9 +2014,9 @@ function createGhostCelestials() {
     sunGlowCanvas.height = 64;
     const sunCtx = sunGlowCanvas.getContext('2d');
     const sunGrad = sunCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    sunGrad.addColorStop(0, 'rgba(255, 255, 230, 0.6)');
-    sunGrad.addColorStop(0.4, 'rgba(255, 250, 220, 0.25)');
-    sunGrad.addColorStop(1, 'rgba(255, 245, 200, 0)');
+    sunGrad.addColorStop(0, 'rgba(255, 220, 80, 0.6)');
+    sunGrad.addColorStop(0.4, 'rgba(255, 200, 50, 0.25)');
+    sunGrad.addColorStop(1, 'rgba(255, 180, 0, 0)');
     sunCtx.fillStyle = sunGrad;
     sunCtx.fillRect(0, 0, 64, 64);
     const sunGlowTexture = new THREE.CanvasTexture(sunGlowCanvas);
@@ -1990,9 +2039,9 @@ function createGhostCelestials() {
     moonGlowCanvas.height = 64;
     const moonCtx = moonGlowCanvas.getContext('2d');
     const moonGrad = moonCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    moonGrad.addColorStop(0, 'rgba(180, 200, 255, 0.5)');
-    moonGrad.addColorStop(0.4, 'rgba(140, 170, 255, 0.2)');
-    moonGrad.addColorStop(1, 'rgba(100, 140, 255, 0)');
+    moonGrad.addColorStop(0, 'rgba(100, 140, 255, 0.5)');
+    moonGrad.addColorStop(0.4, 'rgba(70, 110, 255, 0.2)');
+    moonGrad.addColorStop(1, 'rgba(50, 80, 255, 0)');
     moonCtx.fillStyle = moonGrad;
     moonCtx.fillRect(0, 0, 64, 64);
     const moonGlowTexture = new THREE.CanvasTexture(moonGlowCanvas);
@@ -2009,6 +2058,113 @@ function createGhostCelestials() {
     ghostMoonSprite.renderOrder = 999;
     scene.add(ghostMoonSprite);
 
+}
+
+/**
+ * Create celestial trail sprites (24h path of sun and moon)
+ */
+function createCelestialTrails() {
+    // Sun trail texture — warm yellow (matches ghost sun)
+    const sunCanvas = document.createElement('canvas');
+    sunCanvas.width = 64;
+    sunCanvas.height = 64;
+    const sCtx = sunCanvas.getContext('2d');
+    const sGrad = sCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    sGrad.addColorStop(0, 'rgba(255, 220, 80, 0.6)');
+    sGrad.addColorStop(0.4, 'rgba(255, 200, 50, 0.25)');
+    sGrad.addColorStop(1, 'rgba(255, 180, 0, 0)');
+    sCtx.fillStyle = sGrad;
+    sCtx.fillRect(0, 0, 64, 64);
+    const sunTrailTexture = new THREE.CanvasTexture(sunCanvas);
+
+    // Moon trail texture — cool blue (matches ghost moon)
+    const moonCanvas = document.createElement('canvas');
+    moonCanvas.width = 64;
+    moonCanvas.height = 64;
+    const mCtx = moonCanvas.getContext('2d');
+    const mGrad = mCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    mGrad.addColorStop(0, 'rgba(100, 140, 255, 0.5)');
+    mGrad.addColorStop(0.4, 'rgba(70, 110, 255, 0.2)');
+    mGrad.addColorStop(1, 'rgba(50, 80, 255, 0)');
+    mCtx.fillStyle = mGrad;
+    mCtx.fillRect(0, 0, 64, 64);
+    const moonTrailTexture = new THREE.CanvasTexture(moonCanvas);
+
+    sunTrailSprites = [];
+    moonTrailSprites = [];
+
+    for (let i = 0; i < TRAIL_POINT_COUNT; i++) {
+        // Sun trail sprite
+        const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: sunTrailTexture,
+            transparent: true,
+            depthTest: false,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        }));
+        sunSprite.scale.set(SUN_VISUAL_RADIUS * 4, SUN_VISUAL_RADIUS * 4, 1);
+        sunSprite.visible = false;
+        scene.add(sunSprite);
+        sunTrailSprites.push(sunSprite);
+
+        // Moon trail sprite
+        const moonSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: moonTrailTexture,
+            transparent: true,
+            depthTest: false,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        }));
+        moonSprite.scale.set(MOON_RADIUS * 4, MOON_RADIUS * 4, 1);
+        moonSprite.visible = false;
+        scene.add(moonSprite);
+        moonTrailSprites.push(moonSprite);
+    }
+}
+
+/**
+ * Update celestial trail positions and opacity.
+ * Uses rotation math instead of Swiss Ephemeris — the sun/moon trace
+ * predictable arcs so we rotate the current mesh position backward in time.
+ * Sun: 15°/hr westward (Earth rotation).
+ * Moon: ~14.49°/hr westward (Earth rotation minus orbital motion).
+ * Runs every frame with no throttle since it's just trig, no ephemeris calls.
+ */
+function updateCelestialTrails() {
+    if (!celestialTrailsEnabled || !sunMesh || !moonMesh) {
+        for (let i = 0; i < sunTrailSprites.length; i++) {
+            sunTrailSprites[i].visible = false;
+            moonTrailSprites[i].visible = false;
+        }
+        return;
+    }
+
+    const sx = sunMesh.position.x, sy = sunMesh.position.y, sz = sunMesh.position.z;
+    const mx = moonMesh.position.x, my = moonMesh.position.y, mz = moonMesh.position.z;
+
+    // Trail sees through Earth only when ghost celestials are enabled
+    const seeThrough = ghostViewEnabled;
+
+    for (let i = 0; i < TRAIL_POINT_COUNT; i++) {
+        const hoursAgo = (i + 1) * 0.5;
+        const opacity = 0.8 * (1 - (i + 1) / TRAIL_POINT_COUNT);
+
+        // Sun: rotate current position eastward (back in time) around Z axis at 15°/hr
+        const sa = hoursAgo * 15 * Math.PI / 180;
+        const sc = Math.cos(sa), ss = Math.sin(sa);
+        sunTrailSprites[i].position.set(sx * sc - sy * ss, sx * ss + sy * sc, sz);
+        sunTrailSprites[i].material.opacity = opacity;
+        sunTrailSprites[i].material.depthTest = !seeThrough;
+        sunTrailSprites[i].visible = true;
+
+        // Moon: ~14.49°/hr (15° Earth rotation - 0.51° orbital motion)
+        const ma = hoursAgo * 14.49 * Math.PI / 180;
+        const mc = Math.cos(ma), ms = Math.sin(ma);
+        moonTrailSprites[i].position.set(mx * mc - my * ms, mx * ms + my * mc, mz);
+        moonTrailSprites[i].material.opacity = opacity;
+        moonTrailSprites[i].material.depthTest = !seeThrough;
+        moonTrailSprites[i].visible = true;
+    }
 }
 
 /**
@@ -3909,7 +4065,7 @@ function setupTimeControl() {
 function updateViewZoomButton() {
     if (!toggleViewZoomBtn) return;
 
-    if (isZoomedOut) {
+    if (!isHorizonMode) {
         toggleViewZoomBtn.textContent = '🌍';
         toggleViewZoomBtn.title = 'Switch to horizon view';
     } else {
@@ -3927,16 +4083,19 @@ function setupLeftControls() {
     // Toggle view zoom button
     if (toggleViewZoomBtn) {
         toggleViewZoomBtn.addEventListener('click', () => {
-            isZoomedOut = !isZoomedOut;
-            if (isZoomedOut) {
-                // Zoom out to max
-                cameraRadius = CAMERA_MAX_RADIUS;
+            if (isViewTransitioning) return;
+            if (isHorizonMode) {
+                // Horizon → liftoff to orbital
+                if (camera.fov !== DEFAULT_FOV) {
+                    camera.fov = DEFAULT_FOV;
+                    camera.updateProjectionMatrix();
+                }
+                startViewTransition(-1);
             } else {
-                // Zoom in to horizon view
-                cameraRadius = CAMERA_MIN_RADIUS + 100;
+                // Orbital → fall to horizon
+                cameraRadius = TRANSITION_RADIUS;
+                startViewTransition(1);
             }
-            updateViewZoomButton();
-            updateZoomSlider();
         });
     }
 
@@ -4106,6 +4265,12 @@ function setupLeftControls() {
             ghostViewEnabled = !ghostViewEnabled;
             e.currentTarget.classList.toggle('active', ghostViewEnabled);
             updateGhostVisibility();
+        });
+
+        // Celestial trails toggle
+        document.getElementById('toggle-celestial-trails')?.addEventListener('click', (e) => {
+            celestialTrailsEnabled = !celestialTrailsEnabled;
+            e.currentTarget.classList.toggle('active', celestialTrailsEnabled);
         });
 
     }
@@ -4557,194 +4722,353 @@ function setupLeftControls() {
 /**
  * Setup zoom slider on right side
  */
-let zoomSliderElement = null;
+let sliderThumbElement = null;
+let sliderBridgeElement = null;
 
 const DEFAULT_FOV = 75;
 const MIN_FOV = 15;  // Zoomed in
 
-function updateZoomSlider() {
-    if (!zoomSliderElement) return;
-    // Map zoom state to slider value (0-100)
-    // 0 = max zoom out (CAMERA_MAX_RADIUS) - bottom of slider
-    // 50 = horizon view (CAMERA_MIN_RADIUS, FOV = default) - middle of slider
-    // 100 = sky view (CAMERA_MIN_RADIUS, FOV = min/zoomed) - top of slider
+function setThumbY(y) {
+    if (!sliderThumbElement) return;
+    sliderThumbElement.style.top = Math.round(y) + 'px';
+}
 
-    // During fall transition, compute effective radius from blend
-    // (cameraRadius stays at transitionStartRadius, but the visual blend moves toward horizon)
-    let effectiveRadius = cameraRadius;
-    if (isViewTransitioning && viewTransitionDirection === 1) {
-        const easedBlend = horizonBlendValue * horizonBlendValue * (3 - 2 * horizonBlendValue);
-        effectiveRadius = transitionStartRadius * (1 - easedBlend) + HORIZON_CAMERA_HEIGHT * easedBlend;
+function getCurrentThumbY() {
+    if (!sliderThumbElement) return SLIDER_TOTAL_HEIGHT;
+    return parseFloat(sliderThumbElement.style.top) || SLIDER_TOTAL_HEIGHT;
+}
+
+function updateZoomSlider() {
+    if (!sliderThumbElement) return;
+
+    if (isViewTransitioning) {
+        const bridgeProgress = horizonBlendValue;
+        const bridgeY = SLIDER_SKY_HEIGHT + SLIDER_BRIDGE_HEIGHT * (1 - bridgeProgress);
+        setThumbY(bridgeY);
+        updateSliderReadout();
+        return;
     }
 
-    if (effectiveRadius > CAMERA_MIN_RADIUS + 10) {
-        // In orbital view: map cameraRadius to 0-50
-        const range = CAMERA_MAX_RADIUS - CAMERA_MIN_RADIUS;
-        const value = 50 - ((effectiveRadius - CAMERA_MIN_RADIUS) / range) * 50;
-        zoomSliderElement.value = Math.max(0, value);
-    } else {
-        // In horizon/sky view: map camera FOV to 50-100
-        // FOV: DEFAULT_FOV = horizon (50), MIN_FOV = zoomed in (100)
+    if (isHorizonMode) {
+        // Position on sky track based on FOV
         const fovRange = DEFAULT_FOV - MIN_FOV;
         const currentFov = camera ? camera.fov : DEFAULT_FOV;
-        const fovRatio = (DEFAULT_FOV - currentFov) / fovRange;
-        const value = 50 + fovRatio * 50;
-        zoomSliderElement.value = Math.min(100, value);
+        const t = (currentFov - MIN_FOV) / fovRange; // 0 = MIN_FOV (top), 1 = DEFAULT_FOV (bottom)
+        setThumbY(t * SLIDER_SKY_HEIGHT);
+    } else {
+        // Position on orbital track based on radius (log-scale)
+        const orbitalTop = SLIDER_SKY_HEIGHT + SLIDER_BRIDGE_HEIGHT;
+        const t = Math.log(Math.max(cameraRadius, TRANSITION_RADIUS) / TRANSITION_RADIUS) / ORBITAL_LOG_RATIO;
+        setThumbY(orbitalTop + Math.max(0, Math.min(1, t)) * SLIDER_ORBITAL_HEIGHT);
+    }
+    updateSliderReadout();
+}
+
+function updateSliderReadout() {
+    const el = document.getElementById('slider-readout');
+    if (!el) return;
+
+    if (isViewTransitioning) {
+        el.textContent = '';
+        return;
+    }
+
+    if (isHorizonMode) {
+        const fov = camera ? camera.fov : DEFAULT_FOV;
+        const mag = DEFAULT_FOV / fov;
+        el.textContent = mag > 1.05 ? `${mag.toFixed(1)}x` : '';
+    } else {
+        const altKm = (cameraRadius - EARTH_RADIUS) * (EARTH_RADIUS_KM / EARTH_RADIUS);
+        if (altKm >= 10000) {
+            el.textContent = `${(altKm / 1000).toFixed(0)}k km`;
+        } else if (altKm >= 1000) {
+            el.textContent = `${(altKm / 1000).toFixed(1)}k km`;
+        } else {
+            el.textContent = `${Math.round(altKm)} km`;
+        }
     }
 }
 
-function setupZoomSlider() {
-    zoomSliderElement = document.getElementById('zoom-slider');
-    if (!zoomSliderElement) return;
+function createTrackMarkers() {
+    const orbitalTrack = document.getElementById('slider-orbital-track');
+    const skyTrack = document.getElementById('slider-sky-track');
+    if (!orbitalTrack || !skyTrack) return;
 
-    // Track previous slider value for detecting transition zone entry
-    let prevSliderValue = null;
-    let prevSliderRadius = cameraRadius;
-    const SLIDER_JUMP_THRESHOLD = 4; // Delta above this = click-to-jump, not drag
+    // Orbital track: altitude ticks (km) - log-spaced
+    const orbitalTicks = [
+        { alt: 1000, label: '1k' },
+        { alt: 2000, label: '2k' },
+        { alt: 5000, label: '5k' },
+        { alt: 10000, label: '10k' },
+        { alt: 20000, label: '20k' },
+    ];
+    orbitalTicks.forEach(tick => {
+        const radius = EARTH_RADIUS + tick.alt * (EARTH_RADIUS / EARTH_RADIUS_KM);
+        const t = Math.log(radius / TRANSITION_RADIUS) / ORBITAL_LOG_RATIO;
+        if (t < 0.02 || t > 0.98) return;
+        const el = document.createElement('div');
+        el.className = 'track-marker';
+        el.textContent = tick.label;
+        el.style.top = (t * 100) + '%';
+        orbitalTrack.appendChild(el);
+    });
 
-    // Handle slider input
-    zoomSliderElement.addEventListener('input', (e) => {
-        if (isViewTransitioning) {
-            // During cinematic transition - snap thumb to animated position
-            updateZoomSlider();
-            return;
+    // Sky track: magnification ticks
+    const fovRange = DEFAULT_FOV - MIN_FOV;
+    const skyTicks = [2, 3, 4, 5];
+    skyTicks.forEach(mag => {
+        const fov = DEFAULT_FOV / mag;
+        if (fov < MIN_FOV || fov > DEFAULT_FOV) return;
+        const t = (fov - MIN_FOV) / fovRange; // 0 = top (min FOV / max zoom), 1 = bottom (default FOV)
+        if (t < 0.02 || t > 0.98) return;
+        const el = document.createElement('div');
+        el.className = 'track-marker sky-marker';
+        el.textContent = mag + 'x';
+        el.style.top = (t * 100) + '%';
+        skyTrack.appendChild(el);
+    });
+}
+
+// Instantly enter horizon mode (for cross-segment clicks/jumps)
+function instantEnterHorizon() {
+    if (focusLocked) {
+        cameraRefLat = focusPointLat - dragOffsetLat;
+        cameraRefLon = focusPointLon - dragOffsetLon;
+    }
+    const target = getHorizonEntryTarget();
+    horizonYaw = target.yaw;
+    horizonPitch = 0;
+    isHorizonMode = true;
+    horizonBlendValue = 1;
+    cameraRadius = CAMERA_MIN_RADIUS;
+    updateViewZoomButton();
+    updateBridgeState();
+}
+
+// Instantly exit horizon mode (for cross-segment clicks/jumps)
+function instantExitHorizon() {
+    isHorizonMode = false;
+    horizonBlendValue = 0;
+    if (camera.fov !== DEFAULT_FOV) {
+        camera.fov = DEFAULT_FOV;
+        camera.updateProjectionMatrix();
+    }
+    updateViewZoomButton();
+    updateBridgeState();
+}
+
+// Update bridge color/class based on current mode (labels styled via CSS)
+function updateBridgeState() {
+    if (!sliderBridgeElement) return;
+    if (isHorizonMode) {
+        sliderBridgeElement.classList.remove('orbital');
+        sliderBridgeElement.classList.add('horizon');
+    } else {
+        sliderBridgeElement.classList.remove('horizon');
+        sliderBridgeElement.classList.add('orbital');
+    }
+}
+
+// Apply zoom state from a thumb Y position within a segment
+function applyThumbPosition(y) {
+    const orbitalTop = SLIDER_SKY_HEIGHT + SLIDER_BRIDGE_HEIGHT;
+
+    if (y <= SLIDER_SKY_HEIGHT) {
+        // Sky segment: map y to FOV
+        const t = Math.max(0, y) / SLIDER_SKY_HEIGHT; // 0 (top/zoomed in) to 1 (bottom/default)
+        camera.fov = MIN_FOV + t * (DEFAULT_FOV - MIN_FOV);
+        camera.updateProjectionMatrix();
+        cameraRadius = CAMERA_MIN_RADIUS;
+
+        // Ensure horizon mode is active
+        if (!isHorizonMode) {
+            instantEnterHorizon();
         }
-        const sliderValue = parseFloat(e.target.value);
 
-        // Initialize previous value on first input
-        if (prevSliderValue === null) {
-            prevSliderValue = sliderValue;
+        // When near bottom of sky track (entering sky view), trigger look-up animation
+        if (camera.fov >= DEFAULT_FOV - 1) {
+            const target = getHorizonEntryTarget();
+            pendingHorizonAnimation = true;
+            pendingTargetYaw = target.yaw;
+            pendingTargetPitch = target.pitch;
         }
 
-        // 0-50: orbital to horizon (cameraRadius MAX to MIN)
-        // 50-100: horizon to sky view (horizonPitch 0 to max up)
+    } else if (y >= orbitalTop) {
+        // Orbital segment: map y to cameraRadius
+        const segY = Math.min(y - orbitalTop, SLIDER_ORBITAL_HEIGHT);
+        const t = segY / SLIDER_ORBITAL_HEIGHT; // 0 (top/close) to 1 (bottom/far)
+        // Log-scale: t=0 → TRANSITION_RADIUS, t=1 → ORBITAL_MAX_RADIUS
+        cameraRadius = TRANSITION_RADIUS * Math.pow(ORBITAL_MAX_RADIUS / TRANSITION_RADIUS, t);
 
-        // Detect click-to-jump vs gradual drag
-        const sliderDelta = Math.abs(sliderValue - prevSliderValue);
-        const isJump = sliderDelta > SLIDER_JUMP_THRESHOLD;
+        if (camera.fov !== DEFAULT_FOV) {
+            camera.fov = DEFAULT_FOV;
+            camera.updateProjectionMatrix();
+        }
 
-        // --- Transition zone detection (only for gradual drags, not click jumps) ---
-        if (!isJump) {
-            // Zooming in: slider crosses into transition zone from below
-            if (sliderValue >= SLIDER_TRANSITION_START && prevSliderValue < SLIDER_TRANSITION_START && !isHorizonMode) {
-                // Compute radius at transition start point
-                const range = CAMERA_MAX_RADIUS - CAMERA_MIN_RADIUS;
-                const t = SLIDER_TRANSITION_START / 50;
-                cameraRadius = CAMERA_MAX_RADIUS - t * range;
-                prevSliderValue = sliderValue;
-                startViewTransition(1);
-                return;
-            }
+        // Ensure orbital mode
+        if (isHorizonMode) {
+            instantExitHorizon();
+        }
 
-            // Zooming out: slider drops from horizon zone (>50) down to ≤50
-            if (sliderValue <= SLIDER_TRANSITION_END && prevSliderValue > SLIDER_TRANSITION_END && isHorizonMode) {
-                // Reset FOV to default before liftoff
+        // Track active zooming in for pointer alignment
+        if (cameraRadius > TRANSITION_RADIUS) {
+            isZoomingIn = true;
+            clearTimeout(zoomingInTimeout);
+            zoomingInTimeout = setTimeout(() => { isZoomingIn = false; }, 150);
+        }
+    }
+    // Bridge zone: no user input — only animated during transitions
+
+    setThumbY(y);
+}
+
+// Clamp thumb Y to valid drag range within current segment, triggers transition at boundary.
+// Requires dragging PAST the edge by a buffer to prevent accidental triggers when grabbing near edge.
+const BRIDGE_TRIGGER_BUFFER = 8; // px past boundary before transition fires
+
+function clampThumbY(y) {
+    const orbitalTop = SLIDER_SKY_HEIGHT + SLIDER_BRIDGE_HEIGHT;
+
+    if (isHorizonMode) {
+        // In horizon/sky mode: clamp to sky track
+        if (y >= SLIDER_SKY_HEIGHT) {
+            // Only trigger after dragging well past the edge
+            if (y >= SLIDER_SKY_HEIGHT + BRIDGE_TRIGGER_BUFFER) {
                 if (camera.fov !== DEFAULT_FOV) {
                     camera.fov = DEFAULT_FOV;
                     camera.updateProjectionMatrix();
                 }
-                prevSliderValue = sliderValue;
                 startViewTransition(-1);
-                return;
             }
+            return SLIDER_SKY_HEIGHT; // park at edge
         }
+        return Math.max(0, y);
+    } else {
+        // In orbital mode: clamp to orbital track
+        if (y <= orbitalTop) {
+            // Only trigger after dragging well past the edge
+            if (y <= orbitalTop - BRIDGE_TRIGGER_BUFFER) {
+                cameraRadius = TRANSITION_RADIUS;
+                startViewTransition(1);
+            }
+            return orbitalTop; // park at edge
+        }
+        return Math.min(SLIDER_TOTAL_HEIGHT, y);
+    }
+}
 
-        prevSliderValue = sliderValue;
+// Handle click on a track segment (jump to position)
+function onTrackClick(e, segment) {
+    if (isViewTransitioning) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const localY = e.clientY - rect.top;
 
-        if (sliderValue <= 50) {
-            // Orbital view: map slider 0-50 to cameraRadius MAX to MIN
-            const range = CAMERA_MAX_RADIUS - CAMERA_MIN_RADIUS;
-            const t = sliderValue / 50; // 0 to 1
-            cameraRadius = CAMERA_MAX_RADIUS - t * range;
+    if (segment === 'sky') {
+        const y = Math.max(0, Math.min(SLIDER_SKY_HEIGHT, localY));
+        if (!isHorizonMode) {
+            instantEnterHorizon();
+        }
+        applyThumbPosition(y);
+    } else {
+        const y = SLIDER_SKY_HEIGHT + SLIDER_BRIDGE_HEIGHT + Math.max(0, Math.min(SLIDER_ORBITAL_HEIGHT, localY));
+        if (isHorizonMode) {
+            instantExitHorizon();
+        }
+        applyThumbPosition(y);
+    }
+}
 
-            // Reset FOV to default when in orbital view
+function setupZoomSlider() {
+    const slider = document.getElementById('custom-zoom-slider');
+    const thumb = document.getElementById('slider-thumb');
+    const skyTrack = document.getElementById('slider-sky-track');
+    const bridge = document.getElementById('slider-bridge');
+    const orbitalTrack = document.getElementById('slider-orbital-track');
+    if (!slider || !thumb) return;
+
+    // Cache element refs globally
+    sliderThumbElement = thumb;
+    sliderBridgeElement = bridge;
+
+    let isSliderDragging = false;
+    let sliderDragStartY = 0;
+    let thumbStartY = 0;
+
+    // --- Thumb drag ---
+    function onDragStart(e) {
+        if (isViewTransitioning) return;
+        isSliderDragging = true;
+        thumb.classList.add('active');
+        sliderDragStartY = (e.touches ? e.touches[0].clientY : e.clientY);
+        thumbStartY = getCurrentThumbY();
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    function onDragMove(e) {
+        if (!isSliderDragging) return;
+        if (isViewTransitioning) {
+            isSliderDragging = false;
+            thumb.classList.remove('active');
+            return;
+        }
+        const clientY = (e.touches ? e.touches[0].clientY : e.clientY);
+        const deltaY = clientY - sliderDragStartY;
+        const newY = clampThumbY(thumbStartY + deltaY);
+        applyThumbPosition(newY);
+    }
+
+    function onDragEnd() {
+        if (!isSliderDragging) return;
+        isSliderDragging = false;
+        thumb.classList.remove('active');
+    }
+
+    // Attach thumb drag events
+    thumb.addEventListener('mousedown', onDragStart);
+    thumb.addEventListener('touchstart', onDragStart, { passive: false });
+    document.addEventListener('mousemove', onDragMove);
+    document.addEventListener('touchmove', onDragMove, { passive: false });
+    document.addEventListener('mouseup', onDragEnd);
+    document.addEventListener('touchend', onDragEnd);
+
+    // --- Track click (jump to position) ---
+    skyTrack.addEventListener('click', (e) => onTrackClick(e, 'sky'));
+    orbitalTrack.addEventListener('click', (e) => onTrackClick(e, 'orbital'));
+
+    // --- Bridge click (trigger transition) ---
+    bridge.addEventListener('click', () => {
+        if (isViewTransitioning || performance.now() < transitionCooldownUntil) return;
+        if (isHorizonMode) {
             if (camera.fov !== DEFAULT_FOV) {
                 camera.fov = DEFAULT_FOV;
                 camera.updateProjectionMatrix();
             }
-
-            // For jumps from horizon to orbital, tear down horizon mode
-            if (isJump && isHorizonMode && cameraRadius > HORIZON_THRESHOLD) {
-                isHorizonMode = false;
-                horizonBlendValue = 0;
-                isZoomedOut = true;
-                updateViewZoomButton();
-            }
-
-            // Track active zooming in for pointer alignment
-            if (cameraRadius < prevSliderRadius && cameraRadius > HORIZON_THRESHOLD) {
-                isZoomingIn = true;
-                clearTimeout(zoomingInTimeout);
-                zoomingInTimeout = setTimeout(() => { isZoomingIn = false; }, 150);
-            }
-            prevSliderRadius = cameraRadius;
+            startViewTransition(-1); // liftoff
         } else {
-            // Sky view: map slider 50-100 to camera FOV (zoom in optically)
-            // Keep camera at min radius
-            cameraRadius = CAMERA_MIN_RADIUS;
-
-            // For jumps from orbital to sky, set up horizon mode instantly
-            if (isJump && !isHorizonMode) {
-                if (focusLocked) {
-                    cameraRefLat = focusPointLat - dragOffsetLat;
-                    cameraRefLon = focusPointLon - dragOffsetLon;
-                }
-                const target = getHorizonEntryTarget();
-                horizonYaw = target.yaw;
-                horizonPitch = 0;
-                isHorizonMode = true;
-                horizonBlendValue = 1;
-                isZoomedOut = false;
-                updateViewZoomButton();
-            }
-
-            // When first entering sky view (slider crosses 50), start looking up animation
-            if (!isHorizonMode || camera.fov >= DEFAULT_FOV - 1) {
-                const target = getHorizonEntryTarget();
-                pendingHorizonAnimation = true;
-                pendingTargetYaw = target.yaw;
-                pendingTargetPitch = target.pitch;
-            }
-
-            const t = (sliderValue - 50) / 50; // 0 to 1
-            const fovRange = DEFAULT_FOV - MIN_FOV;
-            camera.fov = DEFAULT_FOV - t * fovRange;
-            camera.updateProjectionMatrix();
+            cameraRadius = TRANSITION_RADIUS;
+            startViewTransition(1);  // fall
         }
     });
 
-    // Track active/sliding state for cyan highlight
-    zoomSliderElement.addEventListener('mousedown', () => {
-        zoomSliderElement.classList.add('active');
-    });
-    zoomSliderElement.addEventListener('touchstart', () => {
-        zoomSliderElement.classList.add('active');
-    });
-    document.addEventListener('mouseup', () => {
-        zoomSliderElement.classList.remove('active');
-    });
-    document.addEventListener('touchend', () => {
-        zoomSliderElement.classList.remove('active');
-    });
-
     // Prevent context menu on slider
-    zoomSliderElement.addEventListener('contextmenu', (e) => {
+    slider.addEventListener('contextmenu', (e) => {
         e.preventDefault();
     });
 
-    // Initialize slider value
+    // Initialize bridge state, markers, and thumb position
+    updateBridgeState();
+    createTrackMarkers();
     updateZoomSlider();
 }
 
 // Update zoom slider thumb color based on pinned mode
 function updateZoomSliderMode() {
-    if (!zoomSliderElement) return;
+    if (!sliderThumbElement) return;
     if (focusLocked) {
-        zoomSliderElement.classList.remove('unpinned');
-        zoomSliderElement.classList.add('pinned');
+        sliderThumbElement.classList.remove('unpinned');
     } else {
-        zoomSliderElement.classList.remove('pinned');
-        zoomSliderElement.classList.add('unpinned');
+        sliderThumbElement.classList.add('unpinned');
     }
 }
 
@@ -4952,28 +5276,37 @@ const POLARIS = { ra: 2.52, dec: 89.26 };
 let userLat = 45;
 let userLon = 0;
 
-// Camera orbit state
-let cameraRefLat, cameraRefLon;  // Reference position (user's location)
-let cameraRadius = EARTH_RADIUS + 5000;  // Distance from Earth center
-const CAMERA_MIN_RADIUS = EARTH_RADIUS + 4;  // Very close to surface for horizon view
-const CAMERA_MAX_RADIUS = EARTH_RADIUS * 6;
+// === ZOOM CONFIGURATION (tweak these to adjust transition behavior) ===
+const KM_TO_SCENE = EARTH_RADIUS / EARTH_RADIUS_KM;
+const TRANSITION_ALT_KM = 1000;                                    // Transition altitude in real km
+const TRANSITION_RADIUS = EARTH_RADIUS + TRANSITION_ALT_KM * KM_TO_SCENE; // Where orbital↔horizon cinematic triggers
+const ORBITAL_MAX_RADIUS = EARTH_RADIUS * 6;                      // Farthest orbital zoom
+const CAMERA_MIN_RADIUS = EARTH_RADIUS + 4;                       // Near-surface (horizon mode)
+const HORIZON_CAMERA_HEIGHT = EARTH_RADIUS + 16;                   // Fixed camera height in horizon mode
 
-// Horizon view state - discrete states with smooth snap transition
-const HORIZON_THRESHOLD = EARTH_RADIUS + 700;  // Snap threshold
-const HORIZON_CAMERA_HEIGHT = EARTH_RADIUS + 16;  // Fixed height when in horizon mode (flat against surface)
-let isHorizonMode = false;           // Current mode: false = orbital, true = horizon
-let horizonBlendValue = 0;           // Animated blend value (0 = orbital, 1 = horizon)
-const VIEW_SNAP_SPEED = 8;           // Speed of snap transition
+// Camera orbit state
+let cameraRefLat, cameraRefLon;
+let cameraRadius = EARTH_RADIUS + 5000;
+let isHorizonMode = false;
+let horizonBlendValue = 0;
+const VIEW_SNAP_SPEED = 8;
+
 // Cinematic view transition state
-let isViewTransitioning = false;       // True during fall/liftoff animation
-let viewTransitionProgress = 0;        // 0 to 1
-let viewTransitionDirection = 0;       // 1 = falling in, -1 = blasting off
-let transitionStartRadius = 0;         // Camera radius at transition start
-const FALL_DURATION = 1.0;             // seconds - "forced slow" fall
-const LIFTOFF_DURATION = 0.7;          // seconds - slightly faster blast-off
-const LIFTOFF_EXIT_RADIUS = HORIZON_THRESHOLD + 800; // Where camera ends up after liftoff
-const SLIDER_TRANSITION_START = 45;  // Slider value where transition zone begins (zoom in)
-const SLIDER_TRANSITION_END = 50;    // Slider value where transition zone ends (at horizon)
+let isViewTransitioning = false;
+let viewTransitionProgress = 0;
+let viewTransitionDirection = 0;
+let transitionStartRadius = 0;
+const FALL_DURATION = 1.0;
+const LIFTOFF_DURATION = 0.7;
+
+// Custom 3-segment slider layout
+const SLIDER_SKY_HEIGHT = 70;
+const SLIDER_BRIDGE_HEIGHT = 50;
+const SLIDER_ORBITAL_HEIGHT = 70;
+const SLIDER_TOTAL_HEIGHT = SLIDER_SKY_HEIGHT + SLIDER_BRIDGE_HEIGHT + SLIDER_ORBITAL_HEIGHT;
+// Log-scale ratio for orbital track mapping
+const ORBITAL_LOG_RATIO = Math.log(ORBITAL_MAX_RADIUS / TRANSITION_RADIUS);
+let transitionCooldownUntil = 0;
 
 // Drag state
 let isDragging = false;        // Left-click: move focus point
@@ -5171,6 +5504,9 @@ async function init() {
 
     // Create ghost celestial sprites, arcs, and horizon glow
     createGhostCelestials();
+
+    // Create celestial trail sprites (24h sun/moon path)
+    createCelestialTrails();
 
     // Lighting - dim ambient so dark sides aren't pure black
     const ambientLight = new THREE.AmbientLight(0xb8b8b8, 0.2);
@@ -6236,7 +6572,7 @@ function updateGhostCelestials() {
         ghostSunSprite.position.copy(sunMesh.position);
         const sunOcc = getGhostOcclusion(sunMesh.position, sunPos);
         if (sunOcc.occluded) {
-            ghostSunSprite.material.opacity = 0.7;
+            ghostSunSprite.material.opacity = 0.8;
             ghostSunSprite.visible = true;
         } else {
             ghostSunSprite.visible = false;
@@ -6248,7 +6584,7 @@ function updateGhostCelestials() {
         ghostMoonSprite.position.copy(moonMesh.position);
         const moonOcc = getGhostOcclusion(moonMesh.position, moonPos);
         if (moonOcc.occluded) {
-            ghostMoonSprite.material.opacity = 0.5;
+            ghostMoonSprite.material.opacity = 0.7;
             ghostMoonSprite.visible = true;
         } else {
             ghostMoonSprite.visible = false;
@@ -7282,7 +7618,6 @@ function startViewTransition(direction) {
 
         // Set isHorizonMode early so setCameraFromSpherical blend path works
         isHorizonMode = true;
-        isZoomedOut = false;
         updateViewZoomButton();
     }
 
@@ -7312,7 +7647,7 @@ function updateViewTransition(delta) {
         horizonBlendValue = eased;
     } else {
         // BLASTING OFF - animate cameraRadius outward while blend fades
-        cameraRadius = CAMERA_MIN_RADIUS + (LIFTOFF_EXIT_RADIUS - CAMERA_MIN_RADIUS) * eased;
+        cameraRadius = CAMERA_MIN_RADIUS + (TRANSITION_RADIUS - CAMERA_MIN_RADIUS) * eased;
         horizonBlendValue = 1 - eased;
     }
 
@@ -7341,12 +7676,13 @@ function updateViewTransition(delta) {
             // Liftoff complete
             horizonBlendValue = 0;
             isHorizonMode = false;
-            cameraRadius = LIFTOFF_EXIT_RADIUS;
-            isZoomedOut = true;
+            cameraRadius = TRANSITION_RADIUS;
             updateViewZoomButton();
         }
 
         isViewTransitioning = false;
+        transitionCooldownUntil = performance.now() + 400;
+        updateBridgeState();
         updateZoomSlider();
     }
 }
@@ -7359,7 +7695,7 @@ function updateViewMode(delta) {
     // During cinematic transitions, skip normal mode switching - transition controls everything
     if (isViewTransitioning) return;
     // Check if we should switch modes based on threshold
-    const shouldBeHorizon = cameraRadius < HORIZON_THRESHOLD;
+    const shouldBeHorizon = cameraRadius < TRANSITION_RADIUS;
 
     if (shouldBeHorizon !== isHorizonMode) {
         isHorizonMode = shouldBeHorizon;
@@ -7382,8 +7718,6 @@ function updateViewMode(delta) {
         }
         // Cancel any pending animation if leaving horizon mode
         if (!isHorizonMode) pendingHorizonAnimation = false;
-        // Update button to reflect manual zoom change
-        isZoomedOut = !shouldBeHorizon;
         updateViewZoomButton();
     }
 
@@ -7635,7 +7969,7 @@ function setupOrbitControls() {
                 dragStartY = e.clientY;
             } else {
                 // Orbital view mode - rotate camera around Earth
-                const zoomFactor = Math.max(0.3, Math.min(1, (cameraRadius - EARTH_RADIUS) / (CAMERA_MAX_RADIUS - EARTH_RADIUS)));
+                const zoomFactor = Math.max(0.3, Math.min(1, (cameraRadius - EARTH_RADIUS) / (ORBITAL_MAX_RADIUS - EARTH_RADIUS)));
                 const sensitivity = 0.05 + 0.15 * zoomFactor;
                 dragOffsetLon = -deltaX * sensitivity;
                 dragOffsetLat = deltaY * sensitivity;
@@ -7770,7 +8104,7 @@ function setupOrbitControls() {
 
         const zoomSpeed = 500;  // Scaled for larger Earth
         const wasAtMin = cameraRadius <= CAMERA_MIN_RADIUS + 10;
-        const wasInHorizonMode = cameraRadius < HORIZON_THRESHOLD;
+        const wasInHorizonMode = cameraRadius < TRANSITION_RADIUS;
         const zoomingIn = e.deltaY < 0;
 
         // If already in horizon mode, control FOV instead of radius
@@ -7800,23 +8134,26 @@ function setupOrbitControls() {
             camera.updateProjectionMatrix();
         } else {
             // Orbital zoom - check if zooming in would cross threshold
-            if (zoomingIn && cameraRadius >= HORIZON_THRESHOLD && cameraRadius - zoomSpeed < HORIZON_THRESHOLD) {
+            if (zoomingIn && cameraRadius >= TRANSITION_RADIUS && cameraRadius - zoomSpeed < TRANSITION_RADIUS) {
                 // Would cross threshold - trigger cinematic fall instead
                 startViewTransition(1);
                 return;
             }
             cameraRadius += zoomingIn ? -zoomSpeed : zoomSpeed;
         }
-        cameraRadius = THREE.MathUtils.clamp(cameraRadius, CAMERA_MIN_RADIUS, CAMERA_MAX_RADIUS);
+        // Clamp orbital zoom to TRANSITION_RADIUS — below that requires cinematic transition
+        if (!isHorizonMode) {
+            cameraRadius = THREE.MathUtils.clamp(cameraRadius, TRANSITION_RADIUS, ORBITAL_MAX_RADIUS);
+        }
 
         // Reset FOV when leaving horizon mode
-        if (cameraRadius > HORIZON_THRESHOLD && camera.fov !== DEFAULT_FOV) {
+        if (cameraRadius > TRANSITION_RADIUS && camera.fov !== DEFAULT_FOV) {
             camera.fov = DEFAULT_FOV;
             camera.updateProjectionMatrix();
         }
 
         // Track active zooming in for pointer alignment
-        if (zoomingIn && cameraRadius > HORIZON_THRESHOLD) {
+        if (zoomingIn && cameraRadius > TRANSITION_RADIUS) {
             isZoomingIn = true;
             clearTimeout(zoomingInTimeout);
             zoomingInTimeout = setTimeout(() => { isZoomingIn = false; }, 150);
@@ -8045,7 +8382,7 @@ function setupOrbitControls() {
                 touchStartY = e.touches[0].clientY;
             } else {
                 // Orbital view mode - slower when zoomed in
-                const zoomFactor = Math.max(0.3, Math.min(1, (cameraRadius - EARTH_RADIUS) / (CAMERA_MAX_RADIUS - EARTH_RADIUS)));
+                const zoomFactor = Math.max(0.3, Math.min(1, (cameraRadius - EARTH_RADIUS) / (ORBITAL_MAX_RADIUS - EARTH_RADIUS)));
                 const sensitivity = 0.05 + 0.15 * zoomFactor;
                 dragOffsetLon = -deltaX * sensitivity;
                 dragOffsetLat = deltaY * sensitivity;
@@ -8066,7 +8403,7 @@ function setupOrbitControls() {
                 const delta = (lastTouchDistance - distance) * zoomSpeed;
                 const zoomingIn = delta < 0;
                 const wasAtMin = cameraRadius <= CAMERA_MIN_RADIUS + 10;
-                const wasInHorizonMode = cameraRadius < HORIZON_THRESHOLD;
+                const wasInHorizonMode = cameraRadius < TRANSITION_RADIUS;
 
                 // If already in horizon mode, control FOV instead of radius
                 if (wasAtMin && wasInHorizonMode) {
@@ -8095,23 +8432,25 @@ function setupOrbitControls() {
                     camera.updateProjectionMatrix();
                 } else {
                     // Orbital zoom - check if zooming in would cross threshold
-                    if (zoomingIn && cameraRadius >= HORIZON_THRESHOLD && cameraRadius + delta < HORIZON_THRESHOLD) {
+                    if (zoomingIn && cameraRadius >= TRANSITION_RADIUS && cameraRadius + delta < TRANSITION_RADIUS) {
                         startViewTransition(1);
                         lastTouchDistance = distance;
                         return;
                     }
                     cameraRadius += delta;
                 }
-                cameraRadius = THREE.MathUtils.clamp(cameraRadius, CAMERA_MIN_RADIUS, CAMERA_MAX_RADIUS);
+                if (!isHorizonMode) {
+                    cameraRadius = THREE.MathUtils.clamp(cameraRadius, TRANSITION_RADIUS, ORBITAL_MAX_RADIUS);
+                }
 
                 // Reset FOV when leaving horizon mode
-                if (cameraRadius > HORIZON_THRESHOLD && camera.fov !== DEFAULT_FOV) {
+                if (cameraRadius > TRANSITION_RADIUS && camera.fov !== DEFAULT_FOV) {
                     camera.fov = DEFAULT_FOV;
                     camera.updateProjectionMatrix();
                 }
 
                 // Track active zooming in for pointer alignment
-                if (zoomingIn && cameraRadius > HORIZON_THRESHOLD) {
+                if (zoomingIn && cameraRadius > TRANSITION_RADIUS) {
                     isZoomingIn = true;
                     clearTimeout(zoomingInTimeout);
                     zoomingInTimeout = setTimeout(() => { isZoomingIn = false; }, 150);
@@ -8342,8 +8681,8 @@ function animate() {
         while (lonDiff < -180) lonDiff += 360;
 
         // Calculate how much zoom range is left before horizon
-        const zoomRangeLeft = cameraRadius - HORIZON_THRESHOLD;
-        const totalZoomRange = CAMERA_MAX_RADIUS - HORIZON_THRESHOLD;
+        const zoomRangeLeft = cameraRadius - TRANSITION_RADIUS;
+        const totalZoomRange = ORBITAL_MAX_RADIUS - TRANSITION_RADIUS;
         const zoomProgress = 1 - (zoomRangeLeft / totalZoomRange);  // 0 at max, 1 at horizon
 
         // Calculate angular distance to focus point
@@ -8455,6 +8794,9 @@ function animate() {
 
     // Update ghost celestial indicators (through-earth visibility)
     updateGhostCelestials();
+
+    // Update celestial trail positions
+    updateCelestialTrails();
 
     // Update focus highlight position on sphere
     updateFocusHighlight();
