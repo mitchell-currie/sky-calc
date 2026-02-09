@@ -3035,6 +3035,12 @@ canvas {
 }
 
 /* Custom 3-segment zoom slider */
+#custom-zoom-slider,
+#custom-zoom-slider * {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
+}
 #custom-zoom-slider {
     position: relative;
     display: flex;
