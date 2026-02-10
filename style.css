@@ -109,6 +109,12 @@ canvas {
     filter: grayscale(1) opacity(0.4);
 }
 
+#toggle-constellations, #toggle-star-labels {
+    color: #cde;
+    font-weight: bold;
+    font-size: 13px;
+}
+
 /* Focus lock toggle - always appears active as a mode toggle */
 #toggle-focus-lock {
     position: relative;
@@ -3006,7 +3012,7 @@ canvas {
 #right-controls {
     position: fixed;
     right: 10px;
-    top: clamp(100px, 50%, calc(100vh - 240px));
+    top: min(50%, calc(100vh - 340px));
     transform: translateY(-50%);
     z-index: 100;
 }
@@ -3206,6 +3212,27 @@ canvas {
 #slider-thumb:hover {
     transform: translate(-50%, -50%) scale(1.2);
     box-shadow: 0 1px 6px rgba(255,100,180,0.6), inset 0 -1px 2px rgba(0,0,0,0.2), inset 0 1px 2px rgba(255,255,255,0.3);
+}
+
+/* Mobile: slim zoom slider container */
+@media (max-width: 500px), (orientation: portrait) and (max-width: 700px) {
+    #zoom-slider-container {
+        background: transparent;
+        border: none;
+        padding: 4px 2px;
+        gap: 3px;
+        border-radius: 0;
+    }
+    #zoom-slider-container .zoom-label {
+        display: none;
+    }
+    .slider-track {
+        background: rgba(0, 0, 0, 0.5);
+        border-color: rgba(255, 255, 255, 0.25);
+    }
+    #slider-bridge {
+        background: rgba(0, 0, 0, 0.4) !important;
+    }
 }
 
 /* Loading overlay — all animation is pure CSS (compositor thread, not blocked by JS) */

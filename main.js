@@ -1,6 +1,7 @@
 // Swiss Ephemeris for accurate astronomical calculations
 import SwissEph from 'https://cdn.jsdelivr.net/gh/prolaxu/swisseph-wasm@main/src/swisseph.js';
 import { CELESTIAL_EVENTS } from './eclipse-data.js';
+import { STAR_CATALOG, STAR_NAMES, CONSTELLATION_DATA } from './star-data.js';
 
 let swe = null;
 let sweInitialized = false;
@@ -61,8 +62,21 @@ let lastSunUpdateTime = 0;  // Cache sun position updates
 let mapMaterial;  // Reference to map shader material for updating focus highlight
 let earthMaterial;  // Reference to Earth material for updating sunDirection uniform
 let earthFillMaterial;  // Solid fill sphere material (controlled by ocean color/opacity)
-let starField; // Background stars
-let constellationLines;  // Constellation line drawings
+let celestialSphereGroup;  // Group for all stars/constellations (rotated by GMST)
+let starLabelSprites = []; // Star name label sprites (toggled by horizon blend)
+let constellationLinesMesh; // THREE.LineSegments for constellation lines
+let constellationLinesVisible = true;
+let starLabelsEnabled = true;
+
+// Planets (naked-eye visible)
+const PLANETS = [
+    { id: 2, name: 'Mercury', color: [0.73, 0.73, 0.73], size: 3.0 },
+    { id: 3, name: 'Venus',   color: [1.0, 1.0, 0.8],    size: 4.5 },
+    { id: 4, name: 'Mars',    color: [1.0, 0.4, 0.27],    size: 3.5 },
+    { id: 5, name: 'Jupiter', color: [1.0, 0.87, 0.67],   size: 4.0 },
+    { id: 6, name: 'Saturn',  color: [1.0, 0.93, 0.8],    size: 3.0 },
+];
+let planetSprites = []; // { dot, label, planetId }
 let sunLight;  // Directional light from sun
 let focusMarker;  // Marker at camera focus point
 let referenceCube;  // Debug cube at Earth center
@@ -95,6 +109,8 @@ let moonTrailSprites = [];
 // City colors (matched to beam colors)
 let sunCityColor = '#ffdd44';   // Default sun beam color
 let moonCityColor = '#8899ff';  // Default moon beam color
+let currentSunAltDeg = 0;       // Sun altitude in degrees (-90 to +90)
+let currentMoonAltDeg = 0;      // Moon altitude in degrees (-90 to +90)
 
 // Time control - offset in minutes from current time
 let timeOffsetMinutes = 0;
@@ -537,9 +553,9 @@ function initDateTimeWheels() {
         dynamicMax: 30  // Will be updated dynamically based on month (0-indexed)
     });
 
-    // Years (1900-2100)
-    const yearStart = 1900;
-    const yearEnd = 2100;
+    // Years (1600-2400)
+    const yearStart = 1600;
+    const yearEnd = 2400;
     initScrollWheel('wheel-year', {
         values: Array.from({length: yearEnd - yearStart + 1}, (_, i) => yearStart + i),
         cyclic: false,
@@ -2014,8 +2030,9 @@ function createGhostCelestials() {
     sunGlowCanvas.height = 64;
     const sunCtx = sunGlowCanvas.getContext('2d');
     const sunGrad = sunCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    sunGrad.addColorStop(0, 'rgba(255, 220, 80, 0.6)');
-    sunGrad.addColorStop(0.4, 'rgba(255, 200, 50, 0.25)');
+    sunGrad.addColorStop(0, 'rgba(255, 240, 120, 0.9)');
+    sunGrad.addColorStop(0.3, 'rgba(255, 220, 80, 0.5)');
+    sunGrad.addColorStop(0.6, 'rgba(255, 200, 50, 0.15)');
     sunGrad.addColorStop(1, 'rgba(255, 180, 0, 0)');
     sunCtx.fillStyle = sunGrad;
     sunCtx.fillRect(0, 0, 64, 64);
@@ -2028,7 +2045,7 @@ function createGhostCelestials() {
         blending: THREE.AdditiveBlending
     });
     ghostSunSprite = new THREE.Sprite(sunGlowMaterial);
-    ghostSunSprite.scale.set(SUN_VISUAL_RADIUS * 6, SUN_VISUAL_RADIUS * 6, 1);
+    ghostSunSprite.scale.set(SUN_VISUAL_RADIUS * 7, SUN_VISUAL_RADIUS * 7, 1);
     ghostSunSprite.visible = false;
     ghostSunSprite.renderOrder = 999;
     scene.add(ghostSunSprite);
@@ -2039,9 +2056,10 @@ function createGhostCelestials() {
     moonGlowCanvas.height = 64;
     const moonCtx = moonGlowCanvas.getContext('2d');
     const moonGrad = moonCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    moonGrad.addColorStop(0, 'rgba(100, 140, 255, 0.5)');
-    moonGrad.addColorStop(0.4, 'rgba(70, 110, 255, 0.2)');
-    moonGrad.addColorStop(1, 'rgba(50, 80, 255, 0)');
+    moonGrad.addColorStop(0, 'rgba(240, 242, 255, 1.0)');
+    moonGrad.addColorStop(0.25, 'rgba(225, 228, 245, 0.6)');
+    moonGrad.addColorStop(0.5, 'rgba(210, 215, 235, 0.25)');
+    moonGrad.addColorStop(1, 'rgba(190, 195, 215, 0)');
     moonCtx.fillStyle = moonGrad;
     moonCtx.fillRect(0, 0, 64, 64);
     const moonGlowTexture = new THREE.CanvasTexture(moonGlowCanvas);
@@ -2053,7 +2071,7 @@ function createGhostCelestials() {
         blending: THREE.AdditiveBlending
     });
     ghostMoonSprite = new THREE.Sprite(moonGlowMaterial);
-    ghostMoonSprite.scale.set(MOON_RADIUS * 6, MOON_RADIUS * 6, 1);
+    ghostMoonSprite.scale.set(MOON_RADIUS * 7, MOON_RADIUS * 7, 1);
     ghostMoonSprite.visible = false;
     ghostMoonSprite.renderOrder = 999;
     scene.add(ghostMoonSprite);
@@ -2077,15 +2095,15 @@ function createCelestialTrails() {
     sCtx.fillRect(0, 0, 64, 64);
     const sunTrailTexture = new THREE.CanvasTexture(sunCanvas);
 
-    // Moon trail texture — cool blue (matches ghost moon)
+    // Moon trail texture — soft grey/white (matches ghost moon)
     const moonCanvas = document.createElement('canvas');
     moonCanvas.width = 64;
     moonCanvas.height = 64;
     const mCtx = moonCanvas.getContext('2d');
     const mGrad = mCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    mGrad.addColorStop(0, 'rgba(100, 140, 255, 0.5)');
-    mGrad.addColorStop(0.4, 'rgba(70, 110, 255, 0.2)');
-    mGrad.addColorStop(1, 'rgba(50, 80, 255, 0)');
+    mGrad.addColorStop(0, 'rgba(200, 205, 220, 0.55)');
+    mGrad.addColorStop(0.4, 'rgba(180, 185, 200, 0.2)');
+    mGrad.addColorStop(1, 'rgba(160, 165, 180, 0)');
     mCtx.fillStyle = mGrad;
     mCtx.fillRect(0, 0, 64, 64);
     const moonTrailTexture = new THREE.CanvasTexture(moonCanvas);
@@ -2631,6 +2649,7 @@ function updatePositionDisplay() {
     const sunSinAlt = Math.sin(latRad) * Math.sin(sunLatRad) +
                       Math.cos(latRad) * Math.cos(sunLatRad) * Math.cos(sunHa);
     const sunAltitude = Math.asin(sunSinAlt) * 180 / Math.PI;
+    currentSunAltDeg = sunAltitude;
 
     // Azimuth calculation
     const sunCosAz = (Math.sin(sunLatRad) - Math.sin(latRad) * sunSinAlt) /
@@ -2705,6 +2724,7 @@ function updatePositionDisplay() {
     const moonSinAlt = Math.sin(latRad) * Math.sin(moonLatRad) +
                        Math.cos(latRad) * Math.cos(moonLatRad) * Math.cos(moonHa);
     const moonAltitude = Math.asin(moonSinAlt) * 180 / Math.PI;
+    currentMoonAltDeg = moonAltitude;
 
     // Moon azimuth calculation
     const moonCosAz = (Math.sin(moonLatRad) - Math.sin(latRad) * moonSinAlt) /
@@ -4273,6 +4293,19 @@ function setupLeftControls() {
             e.currentTarget.classList.toggle('active', celestialTrailsEnabled);
         });
 
+        // Constellation lines toggle
+        document.getElementById('toggle-constellations')?.addEventListener('click', (e) => {
+            constellationLinesVisible = !constellationLinesVisible;
+            e.currentTarget.classList.toggle('active', constellationLinesVisible);
+            if (constellationLinesMesh) constellationLinesMesh.visible = constellationLinesVisible;
+        });
+
+        // Star labels toggle
+        document.getElementById('toggle-star-labels')?.addEventListener('click', (e) => {
+            starLabelsEnabled = !starLabelsEnabled;
+            e.currentTarget.classList.toggle('active', starLabelsEnabled);
+        });
+
     }
 
     // ==================== CITY CAROUSEL ====================
@@ -4920,6 +4953,7 @@ function applyThumbPosition(y) {
     // Bridge zone: no user input — only animated during transitions
 
     setThumbY(y);
+    updateSliderReadout();
 }
 
 // Clamp thumb Y to valid drag range within current segment, triggers transition at boundary.
@@ -5111,6 +5145,15 @@ function getGMST(jd) {
  * @param {Date} date - Current date/time
  * @returns {{lat: number, lon: number}} Subsolar point in degrees
  */
+function getPlanetRADec(date, planetId) {
+    if (!sweInitialized || !swe) return null;
+    const jd = dateToJulianDay(date);
+    const flags = swe.SEFLG_SWIEPH | 2048; // SEFLG_EQUATORIAL
+    const result = swe.calc_ut(jd, planetId, flags);
+    // result[0] = RA in degrees, result[1] = Dec in degrees
+    return { ra: result[0], dec: result[1] };
+}
+
 function getSunPosition(date) {
     const jd = dateToJulianDay(date);
 
@@ -5232,45 +5275,6 @@ function raDecToPosition(raHours, decDeg, distance) {
     );
 }
 
-// Major constellations - [name, [[ra1, dec1], [ra2, dec2], ...]] in hours and degrees
-const CONSTELLATIONS = {
-    'Orion': [
-        [[5.92, 7.41], [5.53, -1.20]],   // Betelgeuse to Bellatrix region
-        [[5.53, -1.20], [5.42, -2.60]],  // Belt
-        [[5.42, -2.60], [5.24, -8.20]],  // To Rigel area
-        [[5.92, 7.41], [5.59, -1.94]],   // Shoulder to belt
-        [[5.59, -1.94], [5.68, -1.94]],  // Belt stars
-        [[5.68, -1.94], [5.79, -9.67]],  // Belt to Saiph
-    ],
-    'BigDipper': [
-        [[11.06, 61.75], [11.03, 56.38]],  // Dubhe to Merak
-        [[11.03, 56.38], [11.90, 53.69]],  // Merak to Phecda
-        [[11.90, 53.69], [12.26, 57.03]],  // Phecda to Megrez
-        [[12.26, 57.03], [12.90, 55.96]],  // Megrez to Alioth
-        [[12.90, 55.96], [13.40, 54.93]],  // Alioth to Mizar
-        [[13.40, 54.93], [13.79, 49.31]],  // Mizar to Alkaid
-    ],
-    'Cassiopeia': [
-        [[0.15, 59.15], [0.68, 56.54]],   // Schedar to Caph
-        [[0.68, 56.54], [0.95, 60.72]],   // W shape
-        [[0.95, 60.72], [1.43, 60.24]],
-        [[1.43, 60.24], [1.91, 63.67]],
-    ],
-    'Crux': [  // Southern Cross
-        [[12.44, -63.10], [12.52, -57.11]],  // Vertical
-        [[12.35, -58.75], [12.79, -59.69]],  // Horizontal
-    ],
-    'Scorpius': [
-        [[16.49, -26.43], [16.00, -22.62]],  // Antares region
-        [[16.00, -22.62], [15.98, -26.11]],
-        [[16.49, -26.43], [16.87, -34.29]],
-        [[16.87, -34.29], [17.20, -37.10]],
-        [[17.20, -37.10], [17.62, -42.99]],  // Tail
-    ]
-};
-
-// Polaris (North Star) - RA: 2h 31m, Dec: +89° 15'
-const POLARIS = { ra: 2.52, dec: 89.26 };
 
 // Default fallback location: 45°N, 0°E (near Bordeaux, France)
 let userLat = 45;
@@ -6073,12 +6077,12 @@ function createFocusMarker() {
         compassGroup.add(tick);
     }
 
-    // Inner fill (slightly transparent gray)
+    // Inner fill (mostly transparent)
     const innerFillGeometry = new THREE.CircleGeometry(ringInnerRadius, 32);
     const compassFillMaterial = new THREE.MeshBasicMaterial({
         color: 0x888888,
         transparent: true,
-        opacity: 0.5,
+        opacity: 0.12,
         side: THREE.DoubleSide,
         depthWrite: false
     });
@@ -6087,8 +6091,22 @@ function createFocusMarker() {
     innerFill.renderOrder = 102;
     compassGroup.add(innerFill);
 
-    // Sun direction line - added to scene directly for proper renderOrder
-    const sunLineGeometry = new THREE.PlaneGeometry(4, ringInnerRadius * 0.9);
+    // Sun direction line (hollow frame) - added to scene directly for proper renderOrder
+    const sunLineW = 2.5, sunLineH = ringInnerRadius * 0.9, sunBorder = 0.5;
+    const sunLineShape = new THREE.Shape();
+    sunLineShape.moveTo(-sunLineW / 2, -sunLineH / 2);
+    sunLineShape.lineTo(sunLineW / 2, -sunLineH / 2);
+    sunLineShape.lineTo(sunLineW / 2, sunLineH / 2);
+    sunLineShape.lineTo(-sunLineW / 2, sunLineH / 2);
+    sunLineShape.closePath();
+    const sunLineHole = new THREE.Path();
+    sunLineHole.moveTo(-sunLineW / 2 + sunBorder, -sunLineH / 2 + sunBorder);
+    sunLineHole.lineTo(sunLineW / 2 - sunBorder, -sunLineH / 2 + sunBorder);
+    sunLineHole.lineTo(sunLineW / 2 - sunBorder, sunLineH / 2 - sunBorder);
+    sunLineHole.lineTo(-sunLineW / 2 + sunBorder, sunLineH / 2 - sunBorder);
+    sunLineHole.closePath();
+    sunLineShape.holes.push(sunLineHole);
+    const sunLineGeometry = new THREE.ShapeGeometry(sunLineShape);
     const sunLineMaterial = new THREE.MeshBasicMaterial({
         color: 0xffdd44,
         side: THREE.DoubleSide,
@@ -6101,10 +6119,39 @@ function createFocusMarker() {
     const sunLineGroup = new THREE.Group();
     sunLineGroup.visible = false;
     sunLineGroup.add(sunLine);
+    // Sun fill bar (grows from center outward based on altitude)
+    const sunFillInnerW = sunLineW - 2 * sunBorder;
+    const sunFillInnerH = sunLineH - 2 * sunBorder;
+    const sunFillGeometry = new THREE.PlaneGeometry(sunFillInnerW, sunFillInnerH);
+    const sunFillMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffdd44,
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.DoubleSide,
+        depthWrite: false
+    });
+    const sunFill = new THREE.Mesh(sunFillGeometry, sunFillMaterial);
+    sunFill.position.z = 0.9;
+    sunFill.renderOrder = 103;
+    sunLineGroup.add(sunFill);
     scene.add(sunLineGroup);
 
-    // Moon direction line - added to scene directly for proper renderOrder
-    const moonLineGeometry = new THREE.PlaneGeometry(3, ringInnerRadius * 0.9);
+    // Moon direction line (hollow frame) - added to scene directly for proper renderOrder
+    const moonLineW = 2, moonLineH = ringInnerRadius * 0.9, moonBorder = 0.4;
+    const moonLineShape = new THREE.Shape();
+    moonLineShape.moveTo(-moonLineW / 2, -moonLineH / 2);
+    moonLineShape.lineTo(moonLineW / 2, -moonLineH / 2);
+    moonLineShape.lineTo(moonLineW / 2, moonLineH / 2);
+    moonLineShape.lineTo(-moonLineW / 2, moonLineH / 2);
+    moonLineShape.closePath();
+    const moonLineHole = new THREE.Path();
+    moonLineHole.moveTo(-moonLineW / 2 + moonBorder, -moonLineH / 2 + moonBorder);
+    moonLineHole.lineTo(moonLineW / 2 - moonBorder, -moonLineH / 2 + moonBorder);
+    moonLineHole.lineTo(moonLineW / 2 - moonBorder, moonLineH / 2 - moonBorder);
+    moonLineHole.lineTo(-moonLineW / 2 + moonBorder, moonLineH / 2 - moonBorder);
+    moonLineHole.closePath();
+    moonLineShape.holes.push(moonLineHole);
+    const moonLineGeometry = new THREE.ShapeGeometry(moonLineShape);
     const moonLineMaterial = new THREE.MeshBasicMaterial({
         color: 0x8899ff,
         side: THREE.DoubleSide,
@@ -6117,6 +6164,21 @@ function createFocusMarker() {
     const moonLineGroup = new THREE.Group();
     moonLineGroup.visible = false;
     moonLineGroup.add(moonLine);
+    // Moon fill bar (grows from center outward based on altitude)
+    const moonFillInnerW = moonLineW - 2 * moonBorder;
+    const moonFillInnerH = moonLineH - 2 * moonBorder;
+    const moonFillGeometry = new THREE.PlaneGeometry(moonFillInnerW, moonFillInnerH);
+    const moonFillMaterial = new THREE.MeshBasicMaterial({
+        color: 0x8899ff,
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.DoubleSide,
+        depthWrite: false
+    });
+    const moonFill = new THREE.Mesh(moonFillGeometry, moonFillMaterial);
+    moonFill.position.z = 0.4;
+    moonFill.renderOrder = 103;
+    moonLineGroup.add(moonFill);
     scene.add(moonLineGroup);
 
     // Cardinal direction markers (triangular ticks)
@@ -6154,9 +6216,17 @@ function createFocusMarker() {
 
     scene.add(compassGroup);
 
-    // Store compass groups for updates
+    // Store compass groups and fill refs for updates
     focusMarker.userData.sunLineGroup = sunLineGroup;
     focusMarker.userData.moonLineGroup = moonLineGroup;
+    focusMarker.userData.sunFill = sunFill;
+    focusMarker.userData.moonFill = moonFill;
+    focusMarker.userData.sunFillH = sunFillInnerH;
+    focusMarker.userData.moonFillH = moonFillInnerH;
+    focusMarker.userData.sunBorder = sunBorder;
+    focusMarker.userData.moonBorder = moonBorder;
+    focusMarker.userData.sunLineH = sunLineH;
+    focusMarker.userData.moonLineH = moonLineH;
 
     // Store spot meshes and materials for updates
     focusMarker.userData.spotOutline = spotOutline;
@@ -6252,83 +6322,273 @@ function syncCameraToFocusInHorizonMode() {
 }
 
 /**
- * Create celestial bodies (stars, constellations)
- * Note: Sun and moon meshes removed for geometry overhaul - will use accurate orbital mechanics
+ * Convert B-V color index to RGB values
+ * Based on Mitchell Charity's blackbody color approximation
  */
-function createCelestialBodies() {
-    // ===== POLARIS (North Star) =====
-    const polarisGeometry = new THREE.SphereGeometry(100, 16, 16);
-    const polarisMaterial = new THREE.MeshBasicMaterial({ color: 0xffffcc });
-    const polarisMesh = new THREE.Mesh(polarisGeometry, polarisMaterial);
-    // Polaris is at celestial north pole - fixed position
-    // Convert RA/Dec to position on celestial sphere
-    const polarisPos = raDecToPosition(POLARIS.ra, POLARIS.dec, STAR_DISTANCE);
-    polarisMesh.position.copy(polarisPos);
-    scene.add(polarisMesh);
+function bvToRGB(bv) {
+    // Clamp B-V to valid range
+    bv = Math.max(-0.4, Math.min(2.0, bv));
+    // Temperature from B-V (Ballesteros 2012)
+    const t = 4600 * (1 / (0.92 * bv + 1.7) + 1 / (0.92 * bv + 0.62));
+    const x = t / 100; // Tanner Helland uses temp/100
+    let r, g, b;
+    // Red: cool stars have full red, hot stars lose red
+    if (x <= 66) {
+        r = 1.0;
+    } else {
+        r = Math.min(1, Math.max(0, 1.293 * Math.pow(x - 60, -0.1332)));
+    }
+    // Green: peaks at mid temperatures
+    if (x <= 66) {
+        g = Math.min(1, Math.max(0, 0.390 * Math.log(x) - 0.632));
+    } else {
+        g = Math.min(1, Math.max(0, 1.130 * Math.pow(x - 60, -0.0755)));
+    }
+    // Blue: hot stars have full blue, cool stars lose blue
+    if (x >= 66) {
+        b = 1.0;
+    } else if (x <= 19) {
+        b = 0;
+    } else {
+        b = Math.min(1, Math.max(0, 0.543 * Math.log(x - 10) - 1.196));
+    }
+    return [r, g, b];
+}
 
-    // Polaris glow
-    const polarisGlowCanvas = document.createElement('canvas');
-    polarisGlowCanvas.width = 64;
-    polarisGlowCanvas.height = 64;
-    const pCtx = polarisGlowCanvas.getContext('2d');
-    const pGradient = pCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    pGradient.addColorStop(0, 'rgba(255, 255, 220, 0.8)');
-    pGradient.addColorStop(0.5, 'rgba(255, 255, 200, 0.2)');
-    pGradient.addColorStop(1, 'rgba(255, 255, 180, 0)');
-    pCtx.fillStyle = pGradient;
-    pCtx.fillRect(0, 0, 64, 64);
-    const polarisGlowTexture = new THREE.CanvasTexture(polarisGlowCanvas);
-    const polarisGlowMaterial = new THREE.SpriteMaterial({
-        map: polarisGlowTexture,
+/**
+ * Create a text label sprite for a planet name (colored, italic)
+ */
+function createPlanetLabel(name, position, color) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 512;
+    canvas.height = 128;
+    ctx.font = 'italic bold 56px sans-serif';
+    const [r, g, b] = color;
+    ctx.fillStyle = `rgba(${r*255|0}, ${g*255|0}, ${b*255|0}, 0.95)`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(name, 256, 64);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    const material = new THREE.SpriteMaterial({
+        map: texture,
         transparent: true,
+        depthWrite: false,
         blending: THREE.AdditiveBlending
     });
-    const polarisGlow = new THREE.Sprite(polarisGlowMaterial);
-    polarisGlow.scale.set(800, 800, 1);
-    polarisMesh.add(polarisGlow);
+    const sprite = new THREE.Sprite(material);
+    const outward = position.clone().normalize().multiplyScalar(STAR_DISTANCE * 0.015);
+    const sideways = new THREE.Vector3(-position.y, position.x, 0).normalize().multiplyScalar(STAR_DISTANCE * 0.025);
+    sprite.position.copy(position).add(outward).add(sideways);
+    sprite.scale.set(STAR_DISTANCE * 0.12, STAR_DISTANCE * 0.03, 1);
+    sprite.visible = false;
+    return sprite;
+}
 
-    // ===== CONSTELLATIONS =====
-    const constellationMaterial = new THREE.LineBasicMaterial({
+/**
+ * Create a text label sprite for a star name
+ */
+function createStarLabel(name, position) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 512;
+    canvas.height = 128;
+    ctx.font = 'bold 56px sans-serif';
+    ctx.fillStyle = 'rgba(200, 220, 255, 0.9)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(name, 256, 64);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    const sprite = new THREE.Sprite(material);
+    // Offset label from star position — push outward and sideways
+    const outward = position.clone().normalize().multiplyScalar(STAR_DISTANCE * 0.015);
+    const sideways = new THREE.Vector3(-position.y, position.x, 0).normalize().multiplyScalar(STAR_DISTANCE * 0.025);
+    sprite.position.copy(position).add(outward).add(sideways);
+    sprite.scale.set(STAR_DISTANCE * 0.12, STAR_DISTANCE * 0.03, 1);
+    sprite.visible = false; // Hidden until horizon mode
+    return sprite;
+}
+
+/**
+ * Create celestial bodies (stars, constellations) from real catalog data
+ * All celestial objects are added to celestialSphereGroup which rotates by GMST
+ */
+function createCelestialBodies() {
+    celestialSphereGroup = new THREE.Group();
+    scene.add(celestialSphereGroup);
+
+    // ===== BUILD STAR POSITION MAP =====
+    const starPositionMap = new Map(); // hipId -> Vector3
+    const starPositions = [];
+    const starColors = [];
+    const starSizes = [];
+
+    for (const [hip, ra, dec, mag, bv] of STAR_CATALOG) {
+        const pos = raDecToPosition(ra, dec, STAR_DISTANCE);
+        starPositionMap.set(hip, pos);
+
+        starPositions.push(pos.x, pos.y, pos.z);
+
+        // Color from B-V index
+        const [r, g, b] = bvToRGB(bv);
+        starColors.push(r, g, b);
+
+        // Size in pixels from magnitude: brighter = larger
+        // mag -1.5 (Sirius) -> ~5.5px, mag 0 -> ~3.6px, mag 3 -> ~1.5px, mag 5.5 -> 1px
+        const size = Math.max(1.0, 5.5 * Math.pow(10, -0.12 * (mag + 1.5)));
+        starSizes.push(size);
+    }
+
+    // ===== RENDER CATALOG STARS (single draw call) =====
+    const catalogGeometry = new THREE.BufferGeometry();
+    catalogGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
+    catalogGeometry.setAttribute('color', new THREE.Float32BufferAttribute(starColors, 3));
+    catalogGeometry.setAttribute('size', new THREE.Float32BufferAttribute(starSizes, 1));
+
+    const catalogMaterial = new THREE.ShaderMaterial({
+        uniforms: {},
+        vertexShader: `
+            attribute float size;
+            attribute vec3 color;
+            varying vec3 vColor;
+            void main() {
+                vColor = color;
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                // Fixed pixel size — stars are at infinity, no distance scaling
+                // Scale by projection Y to grow when FOV narrows (sky zoom)
+                gl_PointSize = size * projectionMatrix[1][1] * 0.6;
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            varying vec3 vColor;
+            void main() {
+                float dist = length(gl_PointCoord - vec2(0.5));
+                if (dist > 0.5) discard;
+                float alpha = 1.0 - smoothstep(0.0, 0.5, dist);
+                gl_FragColor = vec4(vColor, alpha * 0.9);
+            }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+
+    const catalogStars = new THREE.Points(catalogGeometry, catalogMaterial);
+    celestialSphereGroup.add(catalogStars);
+
+    // ===== POLARIS GLOW =====
+    const polarisPos = starPositionMap.get(11767); // HIP 11767 = Polaris
+    if (polarisPos) {
+        const polarisGlowCanvas = document.createElement('canvas');
+        polarisGlowCanvas.width = 64;
+        polarisGlowCanvas.height = 64;
+        const pCtx = polarisGlowCanvas.getContext('2d');
+        const pGradient = pCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        pGradient.addColorStop(0, 'rgba(255, 255, 220, 0.8)');
+        pGradient.addColorStop(0.5, 'rgba(255, 255, 200, 0.2)');
+        pGradient.addColorStop(1, 'rgba(255, 255, 180, 0)');
+        pCtx.fillStyle = pGradient;
+        pCtx.fillRect(0, 0, 64, 64);
+        const polarisGlowTexture = new THREE.CanvasTexture(polarisGlowCanvas);
+        const polarisGlowMaterial = new THREE.SpriteMaterial({
+            map: polarisGlowTexture,
+            transparent: true,
+            blending: THREE.AdditiveBlending
+        });
+        const polarisGlow = new THREE.Sprite(polarisGlowMaterial);
+        polarisGlow.scale.set(800, 800, 1);
+        polarisGlow.position.copy(polarisPos);
+        celestialSphereGroup.add(polarisGlow);
+    }
+
+    // ===== CONSTELLATION LINES (single draw call) =====
+    const conLinePositions = [];
+    Object.values(CONSTELLATION_DATA).forEach(({ lines }) => {
+        for (const [hip1, hip2] of lines) {
+            const p1 = starPositionMap.get(hip1);
+            const p2 = starPositionMap.get(hip2);
+            if (p1 && p2) {
+                // Slightly smaller radius so lines appear behind stars
+                const scale = 0.998;
+                conLinePositions.push(
+                    p1.x * scale, p1.y * scale, p1.z * scale,
+                    p2.x * scale, p2.y * scale, p2.z * scale
+                );
+            }
+        }
+    });
+
+    const conLineGeometry = new THREE.BufferGeometry();
+    conLineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(conLinePositions, 3));
+    const conLineMaterial = new THREE.LineBasicMaterial({
         color: 0x334466,
         transparent: true,
         opacity: 0.4
     });
+    constellationLinesMesh = new THREE.LineSegments(conLineGeometry, conLineMaterial);
+    celestialSphereGroup.add(constellationLinesMesh);
 
-    Object.entries(CONSTELLATIONS).forEach(([name, lines]) => {
-        lines.forEach(line => {
-            const points = line.map(([ra, dec]) => raDecToPosition(ra, dec, STAR_DISTANCE * 0.99));
-            const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const lineMesh = new THREE.Line(geometry, constellationMaterial);
-            scene.add(lineMesh);
-        });
+    // ===== NAMED STAR LABELS =====
+    starLabelSprites = [];
+    for (const [hipStr, name] of Object.entries(STAR_NAMES)) {
+        const hip = parseInt(hipStr);
+        const pos = starPositionMap.get(hip);
+        if (pos) {
+            const label = createStarLabel(name, pos);
+            celestialSphereGroup.add(label);
+            starLabelSprites.push(label);
+        }
+    }
 
-        // Add star points at vertices
-        const starMaterial = new THREE.PointsMaterial({
-            color: 0xffffff,
-            size: 150,
+    // ===== PLANETS =====
+    planetSprites = [];
+    const simTime = getAbsoluteSimulatedTime();
+    for (const planet of PLANETS) {
+        const raDec = getPlanetRADec(simTime, planet.id);
+        const pos = raDec
+            ? raDecToPosition(raDec.ra / 15, raDec.dec, STAR_DISTANCE)
+            : new THREE.Vector3(STAR_DISTANCE, 0, 0);
+
+        // Dot: glow sprite
+        const dotCanvas = document.createElement('canvas');
+        dotCanvas.width = 64;
+        dotCanvas.height = 64;
+        const dCtx = dotCanvas.getContext('2d');
+        const [cr, cg, cb] = planet.color;
+        const grad = dCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        grad.addColorStop(0, `rgba(${cr*255|0}, ${cg*255|0}, ${cb*255|0}, 1.0)`);
+        grad.addColorStop(0.3, `rgba(${cr*255|0}, ${cg*255|0}, ${cb*255|0}, 0.5)`);
+        grad.addColorStop(1, `rgba(${cr*255|0}, ${cg*255|0}, ${cb*255|0}, 0)`);
+        dCtx.fillStyle = grad;
+        dCtx.fillRect(0, 0, 64, 64);
+        const dotTexture = new THREE.CanvasTexture(dotCanvas);
+        const dotMaterial = new THREE.SpriteMaterial({
+            map: dotTexture,
             transparent: true,
-            opacity: 0.8
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
         });
-        const starPositions = [];
-        const uniqueStars = new Set();
-        lines.forEach(line => {
-            line.forEach(([ra, dec]) => {
-                const key = `${ra},${dec}`;
-                if (!uniqueStars.has(key)) {
-                    uniqueStars.add(key);
-                    const pos = raDecToPosition(ra, dec, STAR_DISTANCE);
-                    starPositions.push(pos.x, pos.y, pos.z);
-                }
-            });
-        });
-        const starsGeometry = new THREE.BufferGeometry();
-        starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
-        const stars = new THREE.Points(starsGeometry, starMaterial);
-        scene.add(stars);
-    });
+        const dot = new THREE.Sprite(dotMaterial);
+        dot.position.copy(pos);
+        const dotScale = STAR_DISTANCE * 0.006 * (planet.size / 3.0);
+        dot.scale.set(dotScale, dotScale, 1);
+        celestialSphereGroup.add(dot);
 
-    // ===== STARFIELD BACKGROUND =====
-    createStarfield();
+        // Label
+        const label = createPlanetLabel(planet.name, pos, planet.color);
+        celestialSphereGroup.add(label);
+
+        planetSprites.push({ dot, label, planetId: planet.id });
+    }
 
     // Initial position update
     updateCelestialPositions();
@@ -6364,112 +6624,6 @@ function createReferenceCube() {
     referenceCube.add(childCube);
 }
 
-/**
- * Create a dense starfield background with milky way
- */
-function createStarfield() {
-    const starDistance = STAR_DISTANCE * 1.5;
-
-    // Create thousands of background stars
-    const starCount = 8000;
-    const starPositions = [];
-    const starColors = [];
-    const starSizes = [];
-
-    for (let i = 0; i < starCount; i++) {
-        // Random position on sphere
-        const theta = Math.random() * Math.PI * 2;
-        const phi = Math.acos(2 * Math.random() - 1);
-
-        // Galactic plane runs roughly through Sagittarius (RA ~18h, Dec ~-29°)
-        // Add more stars near galactic plane for milky way effect
-        const galacticConcentration = Math.random() < 0.3;
-        let adjustedPhi = phi;
-        if (galacticConcentration) {
-            // Concentrate toward a band (galactic plane approximation)
-            adjustedPhi = Math.PI / 2 + (Math.random() - 0.5) * 0.5;
-        }
-
-        const x = starDistance * Math.sin(adjustedPhi) * Math.cos(theta);
-        const y = starDistance * Math.sin(adjustedPhi) * Math.sin(theta);
-        const z = starDistance * Math.cos(adjustedPhi);
-
-        starPositions.push(x, y, z);
-
-        // Star colors - mostly white/blue-white, some yellow/orange
-        const colorRand = Math.random();
-        let r, g, b;
-        if (colorRand < 0.6) {
-            // White/blue-white
-            r = 0.9 + Math.random() * 0.1;
-            g = 0.9 + Math.random() * 0.1;
-            b = 1.0;
-        } else if (colorRand < 0.8) {
-            // Yellow
-            r = 1.0;
-            g = 0.9 + Math.random() * 0.1;
-            b = 0.7 + Math.random() * 0.2;
-        } else if (colorRand < 0.95) {
-            // Orange/red
-            r = 1.0;
-            g = 0.6 + Math.random() * 0.3;
-            b = 0.4 + Math.random() * 0.2;
-        } else {
-            // Blue
-            r = 0.7 + Math.random() * 0.2;
-            g = 0.8 + Math.random() * 0.2;
-            b = 1.0;
-        }
-        starColors.push(r, g, b);
-
-        // Vary star sizes - most small, few bright
-        const sizeRand = Math.random();
-        if (sizeRand < 0.7) {
-            starSizes.push(50 + Math.random() * 50);
-        } else if (sizeRand < 0.95) {
-            starSizes.push(100 + Math.random() * 100);
-        } else {
-            starSizes.push(200 + Math.random() * 150);  // Bright stars
-        }
-    }
-
-    const starsGeometry = new THREE.BufferGeometry();
-    starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
-    starsGeometry.setAttribute('color', new THREE.Float32BufferAttribute(starColors, 3));
-    starsGeometry.setAttribute('size', new THREE.Float32BufferAttribute(starSizes, 1));
-
-    // Custom shader for varied star sizes and colors
-    const starsMaterial = new THREE.ShaderMaterial({
-        uniforms: {},
-        vertexShader: `
-            attribute float size;
-            attribute vec3 color;
-            varying vec3 vColor;
-            void main() {
-                vColor = color;
-                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                gl_PointSize = size * (300.0 / -mvPosition.z);
-                gl_Position = projectionMatrix * mvPosition;
-            }
-        `,
-        fragmentShader: `
-            varying vec3 vColor;
-            void main() {
-                float dist = length(gl_PointCoord - vec2(0.5));
-                if (dist > 0.5) discard;
-                // Soft glow falloff
-                float alpha = 1.0 - smoothstep(0.0, 0.5, dist);
-                gl_FragColor = vec4(vColor, alpha * 0.9);
-            }
-        `,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending
-    });
-
-    const stars = new THREE.Points(starsGeometry, starsMaterial);
-    scene.add(stars);
-}
 
 // Direction vectors for sun and moon (calculated from orbital functions for compass UI)
 let currentSunDir = new THREE.Vector3(1, 0, 0);
@@ -6485,6 +6639,29 @@ function updateCelestialPositions() {
     const moonPos = getMoonPosition(simTime);
     currentSunDir = latLonToDirection(sunPos.lat, sunPos.lon);
     currentMoonDir = latLonToDirection(moonPos.lat, moonPos.lon);
+}
+
+let lastPlanetUpdateTime = 0;
+
+/**
+ * Update planet positions from Swiss Ephemeris (throttled)
+ */
+function updatePlanetPositions() {
+    const now = performance.now();
+    if (now - lastPlanetUpdateTime < 200) return; // Throttle to 5 Hz
+    lastPlanetUpdateTime = now;
+
+    const simTime = getAbsoluteSimulatedTime();
+    for (const entry of planetSprites) {
+        const raDec = getPlanetRADec(simTime, entry.planetId);
+        if (!raDec) continue;
+        const pos = raDecToPosition(raDec.ra / 15, raDec.dec, STAR_DISTANCE);
+        entry.dot.position.copy(pos);
+        // Update label position with same offset as createStarLabel
+        const outward = pos.clone().normalize().multiplyScalar(STAR_DISTANCE * 0.015);
+        const sideways = new THREE.Vector3(-pos.y, pos.x, 0).normalize().multiplyScalar(STAR_DISTANCE * 0.025);
+        entry.label.position.copy(pos).add(outward).add(sideways);
+    }
 }
 
 // ==================== GHOST CELESTIALS SYSTEM ====================
@@ -7425,6 +7602,22 @@ function updateFocusHighlight() {
                         moonLineGroup.setRotationFromMatrix(compassMatrix);
                         moonLineGroup.rotateZ(-moonAzimuth);
                     }
+                }
+
+                // Update sun/moon fill bars based on altitude (degrees)
+                // Direct mapping: 0° (horizon) = full, -90° (nadir) = empty, above 0° = full
+                const { sunFill, moonFill, sunFillH, moonFillH, sunBorder: sBorder, moonBorder: mBorder } = focusMarker.userData;
+                if (sunFill) {
+                    const sunLinear = currentSunAltDeg >= 0 ? 1.0 : Math.max(0, 1 + currentSunAltDeg / 90);
+                    const sunFrac = sunLinear * sunLinear * sunLinear; // cubic: drains aggressively
+                    sunFill.scale.y = Math.max(0.001, sunFrac);
+                    sunFill.position.y = sBorder + sunFillH * sunFrac / 2;
+                }
+                if (moonFill) {
+                    const moonLinear = currentMoonAltDeg >= 0 ? 1.0 : Math.max(0, 1 + currentMoonAltDeg / 90);
+                    const moonFrac = moonLinear * moonLinear * moonLinear;
+                    moonFill.scale.y = Math.max(0.001, moonFrac);
+                    moonFill.position.y = mBorder + moonFillH * moonFrac / 2;
                 }
 
                 if (inHorizon) {
@@ -8791,6 +8984,24 @@ function animate() {
 
     // Update sun and moon positions (real-time)
     updateCelestialPositions();
+
+    // Update planet positions on celestial sphere
+    updatePlanetPositions();
+
+    // Rotate celestial sphere by GMST (Earth's sidereal rotation)
+    if (celestialSphereGroup) {
+        const gmstDeg = getGMST(dateToJulianDay(getAbsoluteSimulatedTime()));
+        celestialSphereGroup.rotation.z = -THREE.MathUtils.degToRad(gmstDeg);
+
+        // Toggle star + planet labels based on horizon blend + user toggle
+        const showLabels = starLabelsEnabled && horizonBlendValue > 0.5;
+        for (let i = 0; i < starLabelSprites.length; i++) {
+            starLabelSprites[i].visible = showLabels;
+        }
+        for (let i = 0; i < planetSprites.length; i++) {
+            planetSprites[i].label.visible = showLabels;
+        }
+    }
 
     // Update ghost celestial indicators (through-earth visibility)
     updateGhostCelestials();
