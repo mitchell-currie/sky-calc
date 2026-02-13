@@ -28,7 +28,16 @@ canvas {
     height: 100%;
 }
 
-/* Left side controls - Toolbox style */
+/* ==================== LEFT TOOLBOX ==================== */
+#left-controls,
+#left-controls *,
+.flyout-panel,
+.flyout-panel * {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
+}
+
 #left-controls {
     position: fixed;
     left: 10px;
@@ -41,13 +50,13 @@ canvas {
     background: rgba(0, 0, 0, 0.7);
     border: 1px solid #444;
     border-radius: 6px;
-    padding: 6px;
+    padding: 4px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
 #left-controls button {
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
     background: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
@@ -57,70 +66,47 @@ canvas {
     align-items: center;
     justify-content: center;
     padding: 0;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
     font-size: 14px;
-    filter: grayscale(1) opacity(0.4);
+    color: #888;
 }
 
 #left-controls button:last-child {
     margin-bottom: 0;
 }
 
-#left-controls button.state-0 {
-    filter: grayscale(1) opacity(0.4);
+#left-controls button:hover {
+    color: #ccc;
+    background: rgba(255, 255, 255, 0.08);
 }
 
-#left-controls button.state-2 {
-    filter: grayscale(0) opacity(1);
+/* Category buttons */
+#left-controls .category-btn {
+    background: transparent !important;
+    border-color: transparent !important;
 }
 
-/* Sun button state 1 - sun colored border (on + beam) */
-#toggle-sun-terminator.state-1 {
-    filter: grayscale(0) opacity(1);
-    border-color: #ff9900;
-    box-shadow: 0 0 8px rgba(255, 150, 0, 0.4);
+#left-controls .category-btn.active {
+    color: #ddd;
 }
 
-#toggle-sun-terminator.state-1:hover {
-    border-color: #ffaa00;
-    box-shadow: 0 0 12px rgba(255, 150, 0, 0.5);
+#left-controls .category-btn:not(.active) {
+    color: #555;
 }
 
-/* Moon button state 1 - moon colored border (on + beam) */
-#toggle-moon-terminator.state-1 {
-    filter: grayscale(0) opacity(1);
-    border-color: #88aaff;
-    box-shadow: 0 0 8px rgba(136, 170, 255, 0.4);
+/* Category button open (panel visible) */
+#left-controls .category-btn.open {
+    background: rgba(68, 170, 255, 0.15) !important;
+    border-color: #4af !important;
+    color: #fff;
 }
 
-#toggle-moon-terminator.state-1:hover {
-    border-color: #99bbff;
-    box-shadow: 0 0 12px rgba(136, 170, 255, 0.5);
-}
-
-/* Grid lines and polar axis toggle active state */
-#left-controls button.active {
-    filter: grayscale(0) opacity(1);
-    border-color: #fff;
-    box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
-}
-
-#left-controls button:not(.active):not(.state-1):not(.state-2):not(.state-0):not(#toggle-focus-lock) {
-    filter: grayscale(1) opacity(0.4);
-}
-
-#toggle-constellations, #toggle-star-labels {
-    color: #cde;
-    font-weight: bold;
-    font-size: 13px;
-}
-
-/* Focus lock toggle - always appears active as a mode toggle */
+/* Focus lock toggle */
 #toggle-focus-lock {
     position: relative;
-    width: 32px;
-    height: 34px;
-    filter: grayscale(0) opacity(1) !important;
+    width: 30px;
+    height: 32px;
+    color: #ddd !important;
     font-size: 16px;
 }
 
@@ -144,72 +130,50 @@ canvas {
     box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
 }
 
-
-/* Earth Settings Panel */
-#earth-settings-panel {
+/* ==================== FLYOUT PANELS ==================== */
+.flyout-panel {
     position: fixed;
-    left: 55px;
-    top: 50%;
-    transform: translateY(-50%);
-    background: rgba(20, 20, 25, 0.95);
+    z-index: 101;
+    min-width: 160px;
+    background: rgba(0, 0, 0, 0.7);
     border: 1px solid #444;
     border-radius: 6px;
-    z-index: 101;
-    min-width: 180px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
-#earth-settings-panel.hidden { display: none; }
+.flyout-panel.hidden { display: none; }
 
-#earth-settings-panel .panel-header {
+.flyout-panel .panel-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 8px 10px;
+    padding: 7px 10px;
     border-bottom: 1px solid #333;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
-    color: #fff;
-}
-
-#earth-settings-panel .panel-header button {
-    background: none;
-    border: none;
     color: #666;
-    font-size: 16px;
-    cursor: pointer;
-    padding: 0;
-    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: 1px;
 }
 
-#earth-settings-panel .panel-header button:hover { color: #fff; }
-
-#earth-settings-panel .panel-row {
+.flyout-panel .panel-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    padding: 8px 10px;
-    border-bottom: 1px solid #222;
+    gap: 12px;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-#earth-settings-panel .panel-row:last-child { border-bottom: none; }
+.flyout-panel .panel-row:last-child { border-bottom: none; }
 
-#earth-settings-panel .panel-row > span {
+.flyout-panel .panel-row > span {
     font-size: 11px;
-    color: #888;
+    color: #999;
+    white-space: nowrap;
 }
 
-#earth-settings-panel .panel-row label {
-    font-size: 11px;
-    color: #888;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-}
-
-#earth-settings-panel .panel-row input[type="color"] {
+.flyout-panel .panel-row input[type="color"] {
     width: 24px;
     height: 18px;
     border: 1px solid #444;
@@ -219,7 +183,7 @@ canvas {
     padding: 0;
 }
 
-#earth-settings-panel .panel-row input[type="range"] {
+.flyout-panel .panel-row input[type="range"] {
     width: 70px;
     height: 4px;
     -webkit-appearance: none;
@@ -229,7 +193,7 @@ canvas {
     cursor: pointer;
 }
 
-#earth-settings-panel .panel-row input[type="range"]::-webkit-slider-thumb {
+.flyout-panel .panel-row input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     width: 12px;
     height: 12px;
@@ -238,51 +202,55 @@ canvas {
     cursor: pointer;
 }
 
-#earth-settings-panel .panel-row input[type="checkbox"] {
-    accent-color: #4af;
-}
-
-#earth-settings-panel .panel-row.toggle-row {
-    justify-content: space-between;
-}
-
-#earth-settings-panel .panel-row.toggle-row > span {
-    min-width: auto;
-}
-
-#earth-settings-panel .panel-toggle {
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #666;
-    font-size: 10px;
-    font-weight: 600;
-    padding: 4px 0;
-    width: 36px;
-    text-align: center;
+.flyout-panel .panel-row label {
+    font-size: 11px;
+    color: #888;
+    display: flex;
+    align-items: center;
+    gap: 6px;
     cursor: pointer;
-    transition: all 0.15s;
 }
 
-#earth-settings-panel .panel-toggle:hover {
-    background: rgba(255, 255, 255, 0.15);
-    border-color: #666;
-}
-
-#earth-settings-panel .panel-toggle.active {
-    background: rgba(68, 170, 255, 0.3);
-    border-color: #4af;
-    color: #4af;
-}
-
-#earth-settings-panel .panel-row.terminator-row input[type="range"] {
+.flyout-panel .panel-row.terminator-row input[type="range"] {
     width: 45px;
 }
 
-#earth-settings-panel .terminator-type-btn {
+.flyout-panel .terminator-type-btn {
     margin-left: auto;
     font-size: 16px;
     line-height: 1;
+}
+
+/* ==================== PILL TOGGLE ==================== */
+.pill-toggle {
+    width: 32px;
+    height: 16px;
+    border-radius: 8px;
+    background: #333;
+    cursor: pointer;
+    position: relative;
+    transition: background 0.2s;
+    flex-shrink: 0;
+}
+
+.pill-toggle.active {
+    background: #2a7acc;
+}
+
+.pill-toggle .pill-knob {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #888;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    transition: left 0.2s, background 0.2s;
+}
+
+.pill-toggle.active .pill-knob {
+    left: 18px;
+    background: #fff;
 }
 
 #compass {

@@ -2,6 +2,7 @@
 import SwissEph from 'https://cdn.jsdelivr.net/gh/prolaxu/swisseph-wasm@main/src/swisseph.js';
 import { CELESTIAL_EVENTS } from './eclipse-data.js';
 import { STAR_CATALOG, STAR_NAMES, CONSTELLATION_DATA } from './star-data.js';
+import { COASTLINE_10M, LAKES_10M, RIVERS_10M } from './coastline-data.js?v=3';
 
 let swe = null;
 let sweInitialized = false;
@@ -67,6 +68,11 @@ let starLabelSprites = []; // Star name label sprites (toggled by horizon blend)
 let constellationLinesMesh; // THREE.LineSegments for constellation lines
 let constellationLinesVisible = true;
 let starLabelsEnabled = true;
+let coastlineMesh;  // Coastline lines (10m)
+let lakesMesh;      // Lake outline lines (10m)
+let riversMesh;     // River lines (10m)
+let coastlinesVisible = true;
+let waterLinesVisible = true;
 
 // Planets (naked-eye visible)
 const PLANETS = [
@@ -1899,9 +1905,8 @@ function updateSunPosition() {
         sunLight.position.set(sunPos.x, sunPos.y, sunPos.z);
     }
 
-    // Update Earth material sunDirection uniform for day/night blending
+    // Update Earth material sunDirection uniform for eclipse darkening
     if (earthMaterial && earthMaterial.userData.sunDirection) {
-        // Normalize sun position to get direction
         const sunDir = new THREE.Vector3(sunPos.x, sunPos.y, sunPos.z).normalize();
         earthMaterial.userData.sunDirection.value.copy(sunDir);
     }
@@ -4193,120 +4198,187 @@ function setupLeftControls() {
         });
     }
 
-    // ==================== EARTH SETTINGS PANEL ====================
-    const earthSettingsBtn = document.getElementById('toggle-earth-settings');
-    const earthSettingsPanel = document.getElementById('earth-settings-panel');
-    const closeEarthSettingsBtn = document.getElementById('close-earth-settings');
+    // ==================== FLYOUT PANEL SYSTEM ====================
+    const flyoutPanels = {
+        'category-earth': document.getElementById('earth-layers-panel'),
+        'category-sky': document.getElementById('sky-layers-panel'),
+        'category-appearance': document.getElementById('earth-settings-panel'),
+    };
 
-    if (earthSettingsBtn && earthSettingsPanel) {
-        earthSettingsBtn.addEventListener('click', () => {
-            earthSettingsPanel.classList.toggle('hidden');
-            earthSettingsBtn.classList.toggle('active', !earthSettingsPanel.classList.contains('hidden'));
-        });
-
-        if (closeEarthSettingsBtn) {
-            closeEarthSettingsBtn.addEventListener('click', () => {
-                earthSettingsPanel.classList.add('hidden');
-                earthSettingsBtn.classList.remove('active');
-            });
-        }
-
-        // Land color (also updates back color to match)
-        document.getElementById('land-color')?.addEventListener('input', (e) => {
-            if (mapMaterial) {
-                const c = new THREE.Color(e.target.value);
-                mapMaterial.uniforms.landColor.value.set(c.r, c.g, c.b);
-                mapMaterial.uniforms.landBackColor.value.set(c.r, c.g, c.b);
-            }
-        });
-
-        // Land opacity
-        document.getElementById('land-opacity')?.addEventListener('input', (e) => {
-            if (mapMaterial) mapMaterial.uniforms.landOpacity.value = e.target.value / 100;
-        });
-
-        // Ocean color - controls fill sphere color (ocean texture is transparent)
-        document.getElementById('ocean-color')?.addEventListener('input', (e) => {
-            if (earthFillMaterial) {
-                earthFillMaterial.color.set(e.target.value);
-            }
-        });
-
-        // Ocean opacity - controls fill sphere opacity and backside surface visibility
-        document.getElementById('ocean-opacity')?.addEventListener('input', (e) => {
-            const opacity = e.target.value / 100;
-            if (earthFillMaterial) {
-                earthFillMaterial.opacity = opacity;
-                // Enable depth write when fully opaque to occlude backside surfaces
-                earthFillMaterial.depthWrite = opacity >= 1.0;
-            }
-            // Scale backside land opacity inversely with fill sphere opacity
-            if (mapMaterial) {
-                const baseLandBackOpacity = 0.6;
-                mapMaterial.uniforms.landBackOpacity.value = baseLandBackOpacity * (1 - opacity);
-            }
-        });
-
-        // Sun light color (directional light from sun)
-        document.getElementById('sun-light-color')?.addEventListener('input', (e) => {
-            if (sunLight) {
-                sunLight.color.set(e.target.value);
-            }
-        });
-
-        // Day cities color (used for city markers in sun visibility)
-        document.getElementById('sun-beam-color')?.addEventListener('input', (e) => {
-            sunCityColor = e.target.value;
-        });
-
-        // Night cities color (used for city markers in moon visibility)
-        document.getElementById('moon-beam-color')?.addEventListener('input', (e) => {
-            moonCityColor = e.target.value;
-        });
-
-        // City labels toggle
-        document.getElementById('toggle-city-labels')?.addEventListener('click', (e) => {
-            cityLabelsVisible = !cityLabelsVisible;
-            e.currentTarget.classList.toggle('active', cityLabelsVisible);
-        });
-
-        // City spheres toggle
-        document.getElementById('toggle-city-spheres')?.addEventListener('click', (e) => {
-            citySpheresVisible = !citySpheresVisible;
-            e.currentTarget.classList.toggle('active', citySpheresVisible);
-            // Immediately update visibility
-            cityMarkers.forEach(marker => {
-                if (!citySpheresVisible) marker.visible = false;
-            });
-        });
-
-        // Ghost celestials toggle
-        document.getElementById('toggle-ghost-view')?.addEventListener('click', (e) => {
-            ghostViewEnabled = !ghostViewEnabled;
-            e.currentTarget.classList.toggle('active', ghostViewEnabled);
-            updateGhostVisibility();
-        });
-
-        // Celestial trails toggle
-        document.getElementById('toggle-celestial-trails')?.addEventListener('click', (e) => {
-            celestialTrailsEnabled = !celestialTrailsEnabled;
-            e.currentTarget.classList.toggle('active', celestialTrailsEnabled);
-        });
-
-        // Constellation lines toggle
-        document.getElementById('toggle-constellations')?.addEventListener('click', (e) => {
-            constellationLinesVisible = !constellationLinesVisible;
-            e.currentTarget.classList.toggle('active', constellationLinesVisible);
-            if (constellationLinesMesh) constellationLinesMesh.visible = constellationLinesVisible;
-        });
-
-        // Star labels toggle
-        document.getElementById('toggle-star-labels')?.addEventListener('click', (e) => {
-            starLabelsEnabled = !starLabelsEnabled;
-            e.currentTarget.classList.toggle('active', starLabelsEnabled);
-        });
-
+    // Position a flyout panel: right of toolbox, bottom-aligned
+    function positionFlyoutPanel(panel) {
+        const toolbox = document.getElementById('left-controls');
+        if (!toolbox || !panel) return;
+        const rect = toolbox.getBoundingClientRect();
+        panel.style.left = (rect.right + 6) + 'px';
+        panel.style.bottom = (window.innerHeight - rect.bottom) + 'px';
+        panel.style.top = 'auto';
     }
+
+    // Open/close flyout panels — only one at a time
+    function toggleFlyoutPanel(categoryId) {
+        const targetPanel = flyoutPanels[categoryId];
+        const btn = document.getElementById(categoryId);
+        const isOpening = targetPanel && targetPanel.classList.contains('hidden');
+
+        // Close all panels and remove open class from all category buttons
+        Object.entries(flyoutPanels).forEach(([id, panel]) => {
+            if (panel) panel.classList.add('hidden');
+            const b = document.getElementById(id);
+            if (b) b.classList.remove('open');
+        });
+
+        // Open the target if it was closed
+        if (isOpening && targetPanel) {
+            targetPanel.classList.remove('hidden');
+            positionFlyoutPanel(targetPanel);
+            if (btn) btn.classList.add('open');
+        }
+    }
+
+    document.getElementById('category-earth')?.addEventListener('click', () => toggleFlyoutPanel('category-earth'));
+    document.getElementById('category-sky')?.addEventListener('click', () => toggleFlyoutPanel('category-sky'));
+    document.getElementById('category-appearance')?.addEventListener('click', () => toggleFlyoutPanel('category-appearance'));
+
+    // ==================== PILL TOGGLE HANDLERS ====================
+    // Map data-toggle values to their actions
+    const pillToggleActions = {
+        'coastlines': {
+            get: () => coastlinesVisible,
+            set: (v) => {
+                coastlinesVisible = v;
+                if (coastlineMesh) coastlineMesh.visible = v;
+            }
+        },
+        'water': {
+            get: () => waterLinesVisible,
+            set: (v) => {
+                waterLinesVisible = v;
+                if (lakesMesh) lakesMesh.visible = v;
+                if (riversMesh) riversMesh.visible = v;
+            }
+        },
+        'city-labels': {
+            get: () => cityLabelsVisible,
+            set: (v) => { cityLabelsVisible = v; }
+        },
+        'city-spheres': {
+            get: () => citySpheresVisible,
+            set: (v) => {
+                citySpheresVisible = v;
+                cityMarkers.forEach(marker => { if (!v) marker.visible = false; });
+            }
+        },
+        'constellations': {
+            get: () => constellationLinesVisible,
+            set: (v) => {
+                constellationLinesVisible = v;
+                if (constellationLinesMesh) constellationLinesMesh.visible = v;
+            }
+        },
+        'star-labels': {
+            get: () => starLabelsEnabled,
+            set: (v) => { starLabelsEnabled = v; }
+        },
+        'ghost-view': {
+            get: () => ghostViewEnabled,
+            set: (v) => {
+                ghostViewEnabled = v;
+                updateGhostVisibility();
+            }
+        },
+        'celestial-trails': {
+            get: () => celestialTrailsEnabled,
+            set: (v) => { celestialTrailsEnabled = v; }
+        }
+    };
+
+    // Attach click handlers to all pill toggles
+    document.querySelectorAll('.pill-toggle[data-toggle]').forEach(pill => {
+        pill.addEventListener('click', () => {
+            const key = pill.dataset.toggle;
+            const action = pillToggleActions[key];
+            if (!action) return;
+            const newVal = !action.get();
+            action.set(newVal);
+            pill.classList.toggle('active', newVal);
+            updateCategoryButtonStates();
+        });
+    });
+
+    // Update category button active state based on child toggles
+    function updateCategoryButtonStates() {
+        const earthBtn = document.getElementById('category-earth');
+        const skyBtn = document.getElementById('category-sky');
+        if (earthBtn) {
+            const anyEarthOn = coastlinesVisible || waterLinesVisible || cityLabelsVisible || citySpheresVisible;
+            earthBtn.classList.toggle('active', anyEarthOn);
+        }
+        if (skyBtn) {
+            const anySkyOn = constellationLinesVisible || starLabelsEnabled || ghostViewEnabled || celestialTrailsEnabled;
+            skyBtn.classList.toggle('active', anySkyOn);
+        }
+    }
+
+    // ==================== APPEARANCE PANEL HANDLERS ====================
+    // Land color (also updates back color to match)
+    document.getElementById('land-color')?.addEventListener('input', (e) => {
+        if (mapMaterial) {
+            const c = new THREE.Color(e.target.value);
+            mapMaterial.uniforms.landColor.value.set(c.r, c.g, c.b);
+            mapMaterial.uniforms.landBackColor.value.set(c.r, c.g, c.b);
+        }
+    });
+
+    // Land opacity
+    document.getElementById('land-opacity')?.addEventListener('input', (e) => {
+        if (mapMaterial) mapMaterial.uniforms.landOpacity.value = e.target.value / 100;
+    });
+
+    // Ocean color - controls fill sphere color (ocean texture is transparent)
+    document.getElementById('ocean-color')?.addEventListener('input', (e) => {
+        if (earthFillMaterial) {
+            earthFillMaterial.color.set(e.target.value);
+        }
+    });
+
+    // Ocean opacity - controls fill sphere opacity and backside surface visibility
+    document.getElementById('ocean-opacity')?.addEventListener('input', (e) => {
+        const opacity = e.target.value / 100;
+        if (earthFillMaterial) {
+            earthFillMaterial.opacity = opacity;
+            earthFillMaterial.depthWrite = opacity >= 1.0;
+        }
+        if (mapMaterial) {
+            const baseLandBackOpacity = 0.6;
+            mapMaterial.uniforms.landBackOpacity.value = baseLandBackOpacity * (1 - opacity);
+        }
+    });
+
+    // Sun light color
+    document.getElementById('sun-light-color')?.addEventListener('input', (e) => {
+        if (sunLight) sunLight.color.set(e.target.value);
+    });
+
+    // Day cities color
+    document.getElementById('sun-beam-color')?.addEventListener('input', (e) => {
+        sunCityColor = e.target.value;
+    });
+
+    // Night cities color
+    document.getElementById('moon-beam-color')?.addEventListener('input', (e) => {
+        moonCityColor = e.target.value;
+    });
+
+    // Map lines color
+    document.getElementById('map-lines-color')?.addEventListener('input', (e) => {
+        const color = new THREE.Color(e.target.value);
+        [coastlineMesh, lakesMesh, riversMesh].forEach(m => {
+            if (m && m.material.uniforms) {
+                m.material.uniforms.lineColor.value.set(color.r, color.g, color.b, m.material.uniforms.lineColor.value.w);
+            }
+        });
+    });
 
     // ==================== CITY CAROUSEL ====================
     const cityCarousel = document.getElementById('city-carousel');
@@ -5357,40 +5429,6 @@ let zoomAlignRampUp = 0;  // Ramps from 0 to 1 for smooth start
 
 const SPOT_POS_RAISE = 8;
 
-/**
- * Load an image and downsample it to reduce memory usage
- * Returns a Three.js texture from the downsampled canvas
- */
-function loadAndDownsampleTexture(url, targetWidth) {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-
-        img.onload = () => {
-            // Calculate target height maintaining aspect ratio
-            const aspectRatio = img.height / img.width;
-            const targetHeight = Math.round(targetWidth * aspectRatio);
-
-            // Create canvas and downsample
-            const canvas = document.createElement('canvas');
-            canvas.width = targetWidth;
-            canvas.height = targetHeight;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
-
-            // Create Three.js texture from canvas
-            const texture = new THREE.CanvasTexture(canvas);
-            texture.minFilter = THREE.LinearFilter;
-            texture.magFilter = THREE.LinearFilter;
-
-            resolve(texture);
-        };
-
-        img.onerror = () => reject(new Error('Failed to load image'));
-        img.src = url;
-    });
-}
-
 // City data now unified with CITIES array at top of file
 
 /**
@@ -5575,7 +5613,7 @@ async function init() {
 function createEarth() {
     const earthGeometry = new THREE.SphereGeometry(EARTH_RADIUS, 512, 512);
 
-    // Create material with day/night texture blending via onBeforeCompile
+    // Create material with eclipse darkening via onBeforeCompile
     earthMaterial = new THREE.MeshStandardMaterial({
         roughness: 0.8,
         metalness: 0.0
@@ -5587,7 +5625,7 @@ function createEarth() {
     earthMaterial.userData.moonRadius = { value: MOON_RADIUS };
     earthMaterial.userData.sunAngularRadius = { value: SUN_ANGULAR_DIAMETER_RAD / 2 };
 
-    // Inject custom shader code for eclipse darkening
+    // Inject custom shader code for eclipse shadow on Earth surface
     earthMaterial.onBeforeCompile = (shader) => {
         // Add custom uniforms
         shader.uniforms.sunDirection = earthMaterial.userData.sunDirection;
@@ -5699,17 +5737,17 @@ function createEarth() {
     earthSphere.receiveShadow = true;
     scene.add(earthSphere);
 
-    // Load day texture
+    // Load Earth surface texture
     const loader = new THREE.TextureLoader();
-    const dayTexturePromise = new Promise((resolve) => {
+    const earthTexturePromise = new Promise((resolve) => {
         loader.load('natural-earth-no-ice-clouds.jpeg', (texture) => {
             earthMaterial.map = texture;
-            earthMaterial.color = new THREE.Color(0xBDCCDB); // Green tint
+            earthMaterial.color = new THREE.Color(0xBDCCDB);
             earthMaterial.needsUpdate = true;
-            console.log('Day texture loaded');
+            console.log('Earth texture loaded');
             resolve();
         }, undefined, (err) => {
-            console.error('Failed to load day texture:', err);
+            console.error('Failed to load Earth texture:', err);
             resolve(); // resolve anyway so overlay still hides
         });
     });
@@ -5728,7 +5766,7 @@ function createEarth() {
         });
     });
 
-    texturesReadyPromise = Promise.all([dayTexturePromise, elevTexturePromise]);
+    texturesReadyPromise = Promise.all([earthTexturePromise, elevTexturePromise]);
 
     // Create shadow-casting sphere for Earth (for solar/lunar eclipses)
     // Uses a fully transparent material but still casts shadows
@@ -5753,6 +5791,113 @@ function createEarth() {
 
     // Create reference cube at center (for debugging)
     createReferenceCube();
+
+    // Create vector coastline overlays (110m + 50m LOD)
+    createCoastlines();
+}
+
+/**
+ * Build THREE.LineSegments from coastline coordinate data.
+ * Interpolates long segments to follow sphere curvature.
+ */
+function buildCoastlineMesh(coastlineData, radius, color, opacity) {
+    const positions = [];
+    const MAX_SEG_DEG = 2; // Subdivide segments longer than 2 degrees
+
+    for (const polyline of coastlineData) {
+        for (let i = 0; i < polyline.length - 1; i++) {
+            const [lng1, lat1] = polyline[i];
+            const [lng2, lat2] = polyline[i + 1];
+
+            // Calculate angular distance for subdivision
+            const dLng = Math.abs(lng2 - lng1);
+            const dLat = Math.abs(lat2 - lat1);
+            const approxDeg = Math.max(dLng, dLat);
+
+            // Skip antimeridian-crossing segments (>90° longitude jump)
+            if (dLng > 90) continue;
+
+            const steps = Math.max(1, Math.ceil(approxDeg / MAX_SEG_DEG));
+
+            for (let s = 0; s < steps; s++) {
+                const t1 = s / steps;
+                const t2 = (s + 1) / steps;
+
+                const iLng1 = lng1 + (lng2 - lng1) * t1;
+                const iLat1 = lat1 + (lat2 - lat1) * t1;
+                const iLng2 = lng1 + (lng2 - lng1) * t2;
+                const iLat2 = lat1 + (lat2 - lat1) * t2;
+
+                const latR1 = iLat1 * Math.PI / 180;
+                const lngR1 = iLng1 * Math.PI / 180;
+                const latR2 = iLat2 * Math.PI / 180;
+                const lngR2 = iLng2 * Math.PI / 180;
+
+                positions.push(
+                    radius * Math.cos(latR1) * Math.cos(lngR1),
+                    radius * Math.cos(latR1) * Math.sin(lngR1),
+                    radius * Math.sin(latR1),
+                    radius * Math.cos(latR2) * Math.cos(lngR2),
+                    radius * Math.cos(latR2) * Math.sin(lngR2),
+                    radius * Math.sin(latR2)
+                );
+            }
+        }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+
+    // ShaderMaterial with back-face discard: depthTest off so terrain can't hide lines,
+    // but fragments on the far side of Earth are discarded so lines don't show through.
+    const col = new THREE.Color(color);
+    const material = new THREE.ShaderMaterial({
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        uniforms: {
+            lineColor: { value: new THREE.Vector4(col.r, col.g, col.b, opacity) }
+        },
+        vertexShader: `
+            varying vec3 vWorldPosition;
+            #include <common>
+            #include <logdepthbuf_pars_vertex>
+            void main() {
+                vec4 worldPos = modelMatrix * vec4(position, 1.0);
+                vWorldPosition = worldPos.xyz;
+                gl_Position = projectionMatrix * viewMatrix * worldPos;
+                #include <logdepthbuf_vertex>
+            }
+        `,
+        fragmentShader: `
+            uniform vec4 lineColor;
+            varying vec3 vWorldPosition;
+            #include <common>
+            #include <logdepthbuf_pars_fragment>
+            void main() {
+                // Discard fragments on the far side of Earth
+                vec3 surfaceNormal = normalize(vWorldPosition);
+                vec3 toCamera = normalize(cameraPosition - vWorldPosition);
+                if (dot(surfaceNormal, toCamera) < 0.0) discard;
+                gl_FragColor = lineColor;
+                #include <logdepthbuf_fragment>
+            }
+        `
+    });
+
+    return new THREE.LineSegments(geometry, material);
+}
+
+function createCoastlines() {
+    const GEO_RADIUS = EARTH_RADIUS; // Barely above surface — back-face shader handles visibility
+
+    coastlineMesh = buildCoastlineMesh(COASTLINE_10M, GEO_RADIUS, 0x88bbcc, 0.4);
+    lakesMesh = buildCoastlineMesh(LAKES_10M, GEO_RADIUS, 0x6699cc, 0.3);
+    riversMesh = buildCoastlineMesh(RIVERS_10M, GEO_RADIUS, 0x5588bb, 0.2);
+
+    scene.add(coastlineMesh);
+    scene.add(lakesMesh);
+    scene.add(riversMesh);
 }
 
 /**
