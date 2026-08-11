@@ -28,9 +28,16 @@ Built with Three.js and Swiss Ephemeris for sub-arcsecond accuracy. Real star ca
 - **800 years of eclipse data** (1600–2400) sourced from NASA — jump to any eclipse instantly
 
 ### Two View Modes
-- **Orbital view** — zoom from geostationary orbit down to treetop level, rotate freely around the globe
-- **Horizon view** — first-person perspective from the ground, look around the sky like a planetarium
-- Cinematic animated transitions between views
+- **Orbital view** — zoom from beyond geostationary orbit down to 50 km altitude, rotate freely around the globe
+- **Horizon view** — first-person perspective from ~1 km above the ground, look around the sky like a planetarium
+- Cinematic animated transitions between views; zoom and drag sensitivity scale with altitude
+
+### HD Satellite Imagery & 3D Terrain
+- **Streamed Sentinel-2 imagery** (EOX s2cloudless) at up to 10 m/pixel — native satellite resolution underfoot in horizon view, via a clipmap ring system with priority loading centered on your position
+- **Real 3D terrain** — AWS Terrain Tiles elevation applied to the same rings at true vertical scale; the camera and compass ride the local terrain height
+- Imagery + terrain fade in automatically below 600 km altitude in orbital view
+- The whole-globe base texture is a **baked Sentinel-2 cloudless 2025 mosaic** (16200 x 8100, assembled from 16,384 tiles), so orbital and horizon views match seamlessly
+- Both toggleable — switch back to the classic globe any time
 
 ### Stars, Constellations & Planets
 - **2,852 real stars** from the HYG v4.1 catalog with accurate color (B-V index) and magnitude
@@ -47,8 +54,8 @@ Built with Three.js and Swiss Ephemeris for sub-arcsecond accuracy. Real star ca
 ### Interactive Globe
 - **486 cities** with click-to-navigate — fly to any city and see local sun/moon data
 - **Draggable focus pointer** with momentum physics — slide it across the globe
-- **Vector coastlines, lakes, and rivers** from Natural Earth (1:10m resolution, 830K line segments)
-- High-resolution Earth texture (16200 x 8100) with elevation displacement mapping
+- **Vector coastlines, lakes, and rivers** from Natural Earth (1:10m resolution, 830K line segments); they hand off to satellite imagery as you descend
+- **Water-only sun glint** — the ocean carries a soft specular reflection at the subsolar point (as satellites actually see it) while land stays matte; sunlight gates off past the local terminator with a brief alpenglow margin on mountain slopes
 
 ### Compass System
 - **Orbital compass** at focus pointer base showing sun/moon bearing
@@ -72,9 +79,10 @@ Built with Three.js and Swiss Ephemeris for sub-arcsecond accuracy. Real star ca
 - **Vanilla JavaScript** — no build tools, no framework, no bundler
 - **Three.js r128** for 3D rendering with logarithmic depth buffer
 - **Swiss Ephemeris (WASM)** for sub-arcsecond planetary positions
-- **Custom GLSL shaders** for eclipse surface darkening, star rendering, coastline back-face culling, and trail effects
-- **GPU optimized** — InstancedMesh batching, merged geometries, idle frame throttling, Page Visibility API
-- Runs entirely client-side as static files — no server, no API calls, no accounts
+- **Custom GLSL shaders** for eclipse surface darkening, terminator lighting, water-only specular, star rendering, coastline back-face culling, and trail effects
+- **Web Mercator tile streaming** — clipmap imagery rings with a priority fetch queue, prefetching, retry, and seam-morphed elevation
+- **GPU optimized** — InstancedMesh batching, merged geometries, event/render decoupling, Page Visibility API, 60fps frame cap
+- Runs entirely client-side as static files — no server, no API keys, no accounts
 
 ### Data Sources
 | Data | Source |
@@ -83,5 +91,7 @@ Built with Three.js and Swiss Ephemeris for sub-arcsecond accuracy. Real star ca
 | Constellation lines | [Stellarium](https://stellarium.org/) |
 | Planetary ephemerides | [Swiss Ephemeris](https://www.astro.com/swisseph/) |
 | Eclipse events (1600–2400) | [NASA Eclipse Website](https://eclipse.gsfc.nasa.gov/) |
-| Coastlines, lakes, rivers, Earth texture | [Natural Earth](https://www.naturalearthdata.com/) (public domain) |
+| Coastlines, lakes, rivers | [Natural Earth](https://www.naturalearthdata.com/) (public domain) |
+| Satellite imagery (globe + streamed tiles) | [Sentinel-2 cloudless](https://s2maps.eu) by [EOX IT Services GmbH](https://eox.at) — contains modified Copernicus Sentinel data, CC-BY-NC-SA, free for non-commercial use |
+| Terrain elevation | [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen terrarium, open data) |
 
