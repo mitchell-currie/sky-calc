@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sky Calc</title>
     <link rel="icon" type="image/png" href="favicon.png?v=4">
-    <link rel="stylesheet" href="style.css?v=261">
+    <link rel="stylesheet" href="style.css?v=262">
 </head>
 <body>
     <div id="loading-overlay">
@@ -30,6 +30,14 @@
 
     <div id="earth-layers-panel" class="flyout-panel hidden">
         <div class="panel-header"><span>Earth</span></div>
+        <div class="panel-row">
+            <span>HD Imagery</span>
+            <div class="pill-toggle active" data-toggle="imagery"><div class="pill-knob"></div></div>
+        </div>
+        <div class="panel-row">
+            <span>3D Terrain</span>
+            <div class="pill-toggle active" data-toggle="elevation"><div class="pill-knob"></div></div>
+        </div>
         <div class="panel-row">
             <span>Coastlines</span>
             <div class="pill-toggle active" data-toggle="coastlines"><div class="pill-knob"></div></div>
@@ -366,7 +374,10 @@
         <div class="compass-celestial" id="compass-moon">🌙</div>
     </div>
 
+    <!-- Always visible: the globe base texture itself is EOX imagery (CC-BY attribution required) -->
+    <div id="imagery-attribution"><a href="https://s2maps.eu" target="_blank" rel="noopener" title="Sentinel-2 cloudless 2025 by EOX IT Services GmbH, CC-BY-NC-SA (contains modified Copernicus Sentinel data)">Sentinel-2 cloudless by EOX</a></div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script type="module" src="main.js?v=418"></script>
+    <script type="module" src="main.js?v=458"></script>
 </body>
 </html>

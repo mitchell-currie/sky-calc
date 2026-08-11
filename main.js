@@ -146,6 +146,7 @@ let calendarViewDate = new Date(); // Month being viewed in calendar
 let isSimulating = false;
 let isPaused = false; // Time is paused
 let isSliderDragging = false; // User is dragging the time slider
+let timeUiDirty = false;      // Time scrub happened: refresh time UI once next frame
 let simulationDirection = 1; // 1 for forward, -1 for reverse
 // Speeds in minutes per second: 1/60 = real-time (1m/m), then faster options
 const SIMULATION_SPEEDS = [1/60, 1, 2, 5, 10, 30, 60, 120, 300, 1440, 2880, 10080, 43200];
@@ -1658,6 +1659,36 @@ function findNextRiseSet(lat, lon, getPosition, fromTime, horizonThreshold, maxD
     return null; // No event found within maxDays
 }
 
+// Cached "next rise/set" per body: a findNextRiseSet search costs ~50-100
+// ephemeris calls, and updatePositionDisplay runs EVERY FRAME while the
+// simulation plays (plus per pointer event while the time slider drags).
+// A cached answer stays valid until sim time passes the event or the
+// pointer moves; backward scrubs re-search at most 4x/s.
+const nextRiseSetCache = {
+    sun: { event: null, fromMs: 0, lat: null, lon: null, realMs: 0 },
+    moon: { event: null, fromMs: 0, lat: null, lon: null, realMs: 0 }
+};
+
+function getNextRiseSetCached(key, lat, lon, getPosition, simTime, horizonThreshold) {
+    const c = nextRiseSetCache[key];
+    const t = simTime.getTime();
+    const locOk = c.lat !== null && Math.abs(lat - c.lat) < 0.01 && Math.abs(lon - c.lon) < 0.01;
+    if (locOk) {
+        // No-event answers (polar day/night) revalidate after an hour of sim time
+        const endMs = c.event ? c.event.time.getTime() : c.fromMs + 3600 * 1000;
+        if (t >= c.fromMs && t < endMs) return c.event;
+        // Scrubbing backward invalidates on every event; serve the slightly
+        // stale answer (the event is still in the future) between searches
+        if (t < c.fromMs && performance.now() - c.realMs < 250) return c.event;
+    }
+    c.event = findNextRiseSet(lat, lon, getPosition, simTime, horizonThreshold);
+    c.fromMs = t;
+    c.lat = lat;
+    c.lon = lon;
+    c.realMs = performance.now();
+    return c.event;
+}
+
 /**
  * Get Moon's distance in km using Swiss Ephemeris
  * @param {Date} date - Current date/time
@@ -1938,8 +1969,10 @@ function calculateEclipseConeGeometry(moonDistanceKm, sunDistanceKm) {
     // Penumbra radius at Earth's distance
     const penumbraRadiusAtEarthKm = MOON_RADIUS_KM + moonDistanceKm * Math.tan(penumbraHalfAngle);
 
-    // Check if umbra reaches Earth (total eclipse possible)
-    const umbraReachesEarth = umbraLengthKm > moonDistanceKm;
+    // Check if umbra reaches Earth's SURFACE (total eclipse possible) — the
+    // sub-lunar surface is ~1 Earth radius closer than the center; testing
+    // against center misclassifies near-limit totals as annular
+    const umbraReachesEarth = umbraLengthKm > moonDistanceKm - EARTH_RADIUS_KM;
 
     // If umbra doesn't reach Earth, calculate antumbra
     let antumbraHalfAngle = 0;
@@ -2267,9 +2300,11 @@ function updateEclipseCones() {
     umbraCone.visible = true;
     penumbraCone.visible = true;
 
-    // Get real distances in km
+    // Get real distances in km. Sun distance matters: ±1.7% over the year
+    // shifts the umbra length ~±6400 km — the margin that decides hybrid
+    // (total-vs-annular) eclipses.
     const moonDistanceKm = getMoonDistance(simTime);
-    const sunDistanceKm = AU_KM;  // Sun distance is approximately 1 AU
+    const sunDistanceKm = getSunDistance(simTime) * 1e6;  // returned in millions of km
 
     // Calculate cone geometry
     const coneParams = calculateEclipseConeGeometry(moonDistanceKm, sunDistanceKm);
@@ -2660,9 +2695,9 @@ function updatePositionDisplay() {
 
     // Update next sunrise/sunset countdown
     if (sunNextEventEl) {
-        const nextSunEvent = findNextRiseSet(lat, lon, getSunPosition, simTime, -0.833);
+        const nextSunEvent = getNextRiseSetCached('sun', lat, lon, getSunPosition, simTime, -0.833);
         if (nextSunEvent) {
-            const totalMins = Math.floor(nextSunEvent.msUntil / (60 * 1000));
+            const totalMins = Math.max(0, Math.floor((nextSunEvent.time.getTime() - simTime.getTime()) / (60 * 1000)));
             const days = Math.floor(totalMins / (24 * 60));
             const hours = Math.floor((totalMins % (24 * 60)) / 60);
             const mins = totalMins % 60;
@@ -2772,9 +2807,9 @@ function updatePositionDisplay() {
     if (moonNextEventEl) {
         try {
             // Moon horizon threshold ~+0.125° (refraction minus parallax, approximate)
-            const nextMoonEvent = findNextRiseSet(lat, lon, getMoonPosition, simTime, 0.125);
+            const nextMoonEvent = getNextRiseSetCached('moon', lat, lon, getMoonPosition, simTime, 0.125);
             if (nextMoonEvent) {
-                const totalMins = Math.floor(nextMoonEvent.msUntil / (60 * 1000));
+                const totalMins = Math.max(0, Math.floor((nextMoonEvent.time.getTime() - simTime.getTime()) / (60 * 1000)));
                 const days = Math.floor(totalMins / (24 * 60));
                 const hours = Math.floor((totalMins % (24 * 60)) / 60);
                 const mins = totalMins % 60;
@@ -2795,6 +2830,8 @@ function updatePositionDisplay() {
     }
 }
 
+let eventMarkersCacheKey = '';
+
 /**
  * Update all event markers on slider (sunrise, sunset, moonrise, moonset)
  */
@@ -2810,6 +2847,14 @@ function updateEventMarkers() {
     // Get closest city for timezone
     const closestCity = findClosestCity(groundPos.lat, groundPos.lon);
     const cityTz = getCityTz(closestCity, getAbsoluteSimulatedTime());
+
+    // Rise/set times depend on (date, location, timezone) — NOT time of day.
+    // The slider input handler calls this on every pointer event, and the two
+    // searches below cost ~700 ephemeris calls; bail out when nothing changed.
+    const dateKey = selectedDate ? selectedDate.toDateString() : new Date().toDateString();
+    const markersKey = dateKey + '|' + groundPos.lat.toFixed(2) + '|' + groundPos.lon.toFixed(2) + '|' + cityTz;
+    if (markersKey === eventMarkersCacheKey) return;
+    eventMarkersCacheKey = markersKey;
 
     // Helper to format time in city local timezone
     const formatCityTimeShort = (date) => {
@@ -3457,10 +3502,7 @@ function attachEclipseClickHandlers(eventsList) {
             document.getElementById('time-slider').value = timeOffsetMinutes;
             calendarViewDate = new Date(selectedDate);
             renderCalendar();
-            updateTimeDisplay();
-            updateCelestialPositions();
-            updateEventMarkers();
-            updateDayNavButtons();
+            timeUiDirty = true;  // refreshed once on the next frame
         };
     });
 }
@@ -3545,10 +3587,7 @@ function renderCalendar() {
             // Keep current timeOffsetMinutes - don't change the time
             document.getElementById('time-slider').classList.remove('live');
             renderCalendar();
-            updateTimeDisplay();
-            updateCelestialPositions();
-            updateEventMarkers();
-            updateDayNavButtons();
+            timeUiDirty = true;  // refreshed once on the next frame
         };
         btn.addEventListener('click', selectDay);
         btn.addEventListener('touchend', selectDay);
@@ -3731,7 +3770,8 @@ function updateSimulation(currentTime) {
         slider.value = Math.round(timeOffsetMinutes);
     }
 
-    // Update displays
+    // Update displays (also satisfies any pending scrub refresh this frame)
+    timeUiDirty = false;
     updateTimeDisplay();
     updateCelestialPositions();
     updatePositionDisplay();
@@ -3814,10 +3854,10 @@ function setupTimeControl() {
             if (playPauseBtn) playPauseBtn.classList.add('playing');
         }
 
-        updateTimeDisplay();
-        updateCelestialPositions();
-        updatePositionDisplay();
-        updateEventMarkers();
+        // Defer all UI/scene refresh to the next animation frame — input
+        // events can outpace frames 2-3x, and the frame loop already moves
+        // the sun/moon/lighting every frame (smooth scrubbing)
+        timeUiDirty = true;
     });
 
     liveBtn.addEventListener('click', () => {
@@ -4212,6 +4252,22 @@ function setupLeftControls() {
     // ==================== PILL TOGGLE HANDLERS ====================
     // Map data-toggle values to their actions
     const pillToggleActions = {
+        'imagery': {
+            get: () => imageryEnabled,
+            set: (v) => { imageryEnabled = v; }  // updateImagery handles visibility + displacement
+        },
+        'elevation': {
+            get: () => elevationEnabled,
+            set: (v) => {
+                elevationEnabled = v;
+                if (imageryRings) {
+                    for (const ring of imageryRings) {
+                        ring.elevDirty = true;               // re-apply (or flatten) heights
+                        if (v) ensureRingElevationTiles(ring);
+                    }
+                }
+            }
+        },
         'coastlines': {
             get: () => coastlinesVisible,
             set: (v) => {
@@ -4284,7 +4340,7 @@ function setupLeftControls() {
         const earthBtn = document.getElementById('category-earth');
         const skyBtn = document.getElementById('category-sky');
         if (earthBtn) {
-            const anyEarthOn = coastlinesVisible || waterLinesVisible || cityLabelsVisible || citySpheresVisible;
+            const anyEarthOn = imageryEnabled || elevationEnabled || coastlinesVisible || waterLinesVisible || cityLabelsVisible || citySpheresVisible;
             earthBtn.classList.toggle('active', anyEarthOn);
         }
         if (skyBtn) {
@@ -5327,11 +5383,14 @@ let userLon = 0;
 
 // === ZOOM CONFIGURATION (tweak these to adjust transition behavior) ===
 const KM_TO_SCENE = EARTH_RADIUS / EARTH_RADIUS_KM;
-const TRANSITION_ALT_KM = 1000;                                    // Transition altitude in real km
+const TRANSITION_ALT_KM = 50;                                      // Transition altitude in real km (orbital mode ends here; was 100/Kármán)
 const TRANSITION_RADIUS = EARTH_RADIUS + TRANSITION_ALT_KM * KM_TO_SCENE; // Where orbital↔horizon cinematic triggers
+const ORBITAL_ZOOM_STEP = 1.15;                                    // Wheel zoom: altitude multiplier per tick (proportional — gentle near the planet, fast far out)
 const ORBITAL_MAX_RADIUS = EARTH_RADIUS * 6;                      // Farthest orbital zoom
 const CAMERA_MIN_RADIUS = EARTH_RADIUS + 4;                       // Near-surface (horizon mode)
-const HORIZON_CAMERA_HEIGHT = EARTH_RADIUS + 16;                   // Fixed camera height in horizon mode
+const HORIZON_CAMERA_HEIGHT = EARTH_RADIUS + 1;                    // Horizon camera: ~1.1 km up, ~750 m above the imagery ground plane
+const GROUND_UI_RAISE = 0.35;                                      // Ground compass height: just above the imagery rings (0.3)
+const GROUND_COMPASS_DEPRESSION_DEG = 22;                          // Compass ring sits this far below level from the standing eye (bigger = smaller ring)
 
 // Camera orbit state
 let cameraRefLat, cameraRefLon;
@@ -5400,6 +5459,7 @@ let zoomingInTimeout = null;
 let zoomAlignRampUp = 0;  // Ramps from 0 to 1 for smooth start
 
 const SPOT_POS_RAISE = 8;
+const POINTER_SHRINK_START_ALT = 2000;  // pointer/spot begin shrinking below this altitude (~2100 km)
 
 // City data now unified with CITIES array at top of file
 
@@ -5598,7 +5658,7 @@ async function init() {
     camera = new THREE.PerspectiveCamera(
         75,
         window.innerWidth / window.innerHeight,
-        1,
+        0.05,     // Near plane: ground is <1 unit below the horizon camera (log depth keeps precision)
         10000000  // Far plane for sun at 6M units
     );
 
@@ -5827,6 +5887,10 @@ function createEarth() {
         shader.fragmentShader = shader.fragmentShader.replace(
             '#include <map_fragment>',
             `#include <map_fragment>
+            // Water mask from the raw texel (before tinting): blue-dominant
+            // pixels are ocean/lakes. Drives water-only specular below.
+            float waterness = smoothstep(0.02, 0.10, diffuseColor.b - max(diffuseColor.r, diffuseColor.g));
+
             // Calculate sun illumination factor for eclipse darkening
             float sunDot = dot(vWorldNormal, normalize(sunDirection));
             float dayFactor = smoothstep(-0.1, 0.2, sunDot);
@@ -5838,8 +5902,44 @@ function createEarth() {
             float eclipseDarkening = 1.0 - eclipseCoverage * 0.95;
             // Darken the color based on how much sun is blocked, only on day side
             diffuseColor.rgb *= mix(1.0, eclipseDarkening, dayFactor);
+
+            // Civil twilight: soft, near-neutral brightness ramp ~7 deg past the
+            // terminator (sunset COLOR lives in the direct light, not painted here)
+            float twilightGlow = smoothstep(-0.12, 0.0, sunDot) * (1.0 - dayFactor);
+            diffuseColor.rgb *= 1.0 + twilightGlow * vec3(0.50, 0.44, 0.36);
             `
         );
+
+        // Water-only specular: land is matte at every scale; ocean sun glint is
+        // real (satellites see it). waterness computed in map_fragment above.
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <roughnessmap_fragment>',
+            `#include <roughnessmap_fragment>
+            roughnessFactor = mix(1.0, 0.45, waterness);
+            `
+        );
+
+        // Ocean glint: roll off the specular peak (Reinhard) instead of hard-
+        // clipping to a flat white disc — a soft bright glow like real sun
+        // glitter seen from orbit. Only specular is compressed.
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <aomap_fragment>',
+            `#include <aomap_fragment>
+            reflectedLight.directSpecular /= (vec3(1.0) + reflectedLight.directSpecular);
+            `
+        );
+
+        // Earth's own shadow: direct sun gates off just past local sunset
+        // (small negative margin = brief alpenglow). No sunset color games —
+        // an honest light tint is invisible at grazing angles, and a visible
+        // one has to be faked.
+        shader.fragmentShader = shader.fragmentShader
+            .split('RE_Direct( directLight, geometry, material, reflectedLight );')
+            .join(`{
+                float gSunDot = dot(normalize(vWorldPosition), normalize(sunDirection));
+                directLight.color *= smoothstep(-0.035, 0.01, gSunDot);
+                RE_Direct( directLight, geometry, material, reflectedLight );
+            }`);
 
         // Store shader reference for uniform updates
         earthMaterial.userData.shader = shader;
@@ -5854,7 +5954,16 @@ function createEarth() {
     // Load Earth surface texture
     const loader = new THREE.TextureLoader();
     const earthTexturePromise = new Promise((resolve) => {
-        loader.load('natural-earth-no-ice-clouds.jpeg', (texture) => {
+        // Global base: Sentinel-2 cloudless 2025 (EOX, CC-BY-NC-SA), baked
+        // from z7 tiles supersampled to 16200x8100 (~2.5 km/px) — same vintage
+        // as the HD ring tiles, so colors match exactly. (2018 layer rejected:
+        // orbit-swath striping over the Amazon.) natural-earth-no-ice-clouds
+        // .jpeg kept on disk as the revert option.
+        loader.load('s2cloudless-2025-16k.jpg', (texture) => {
+            // Anisotropic filtering: keeps ground texture sharp at grazing angles (horizon mode)
+            texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+            // Repeat wrap: seamless sampling for anything reading unwrapped longitudes
+            texture.wrapS = THREE.RepeatWrapping;
             earthMaterial.map = texture;
             earthMaterial.color = new THREE.Color(0xBDCCDB);
             earthMaterial.needsUpdate = true;
@@ -5968,7 +6077,8 @@ function buildCoastlineMesh(coastlineData, radius, color, opacity) {
         depthTest: false,
         depthWrite: false,
         uniforms: {
-            lineColor: { value: new THREE.Vector4(col.r, col.g, col.b, opacity) }
+            lineColor: { value: new THREE.Vector4(col.r, col.g, col.b, opacity) },
+            fade: { value: 1.0 }   // driven by updateImagery: lines dissolve as HD rings arrive
         },
         vertexShader: `
             varying vec3 vWorldPosition;
@@ -5983,6 +6093,7 @@ function buildCoastlineMesh(coastlineData, radius, color, opacity) {
         `,
         fragmentShader: `
             uniform vec4 lineColor;
+            uniform float fade;
             varying vec3 vWorldPosition;
             #include <common>
             #include <logdepthbuf_pars_fragment>
@@ -5991,7 +6102,7 @@ function buildCoastlineMesh(coastlineData, radius, color, opacity) {
                 vec3 surfaceNormal = normalize(vWorldPosition);
                 vec3 toCamera = normalize(cameraPosition - vWorldPosition);
                 if (dot(surfaceNormal, toCamera) < 0.0) discard;
-                gl_FragColor = lineColor;
+                gl_FragColor = vec4(lineColor.rgb, lineColor.a * fade);
                 #include <logdepthbuf_fragment>
             }
         `
@@ -6010,6 +6121,860 @@ function createCoastlines() {
     scene.add(coastlineMesh);
     scene.add(lakesMesh);
     scene.add(riversMesh);
+}
+
+// ==================== HD IMAGERY (horizon mode) ====================
+// High-resolution satellite imagery streamed as Web Mercator tiles from
+// EOX "Sentinel-2 cloudless" (https://s2maps.eu — free for non-commercial
+// use, attribution required; see #imagery-attribution in index.html).
+// Concentric clipmap rings centered on the focus point: each ring is a
+// 4x4-tile square at one zoom level with a hole where the next finer ring
+// sits — sharpest imagery underfoot, halving each ring outward, outermost
+// ring past the horizon. All rings share one radius (no overlap, so no
+// z-fighting); unloaded areas alpha-discard so the globe texture shows
+// through until tiles arrive. Same z/x/y tiling scheme as AWS terrain
+// tiles, so real elevation can later be added to these exact rings.
+
+const IMAGERY_URL = (z, y, x) =>
+    `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/${z}/${y}/${x}.jpg`;
+const IMAGERY_ZOOM_MAX = 14;       // innermost ring (~10 m/px — native Sentinel-2 resolution)
+const IMAGERY_ZOOM_MIN = 6;        // outermost ring (~±1000 km: covers the view in low-orbital preview)
+const IMAGERY_ORBITAL_SHOW = EARTH_RADIUS + 600 * KM_TO_SCENE;   // rings visible in orbital below 600 km altitude
+const IMAGERY_ORBITAL_FADE = EARTH_RADIUS + 1200 * KM_TO_SCENE;  // fake displacement melts between 1200 and 600 km on approach
+const IMAGERY_ORBITAL_MAX_ZOOM = 11;  // ceiling of the altitude-matched display cap in orbital preview
+const IMAGERY_RING_TILES = 4;      // tiles per ring side (4x4)
+const IMAGERY_SUBDIV = 8;          // mesh cells per tile side (follows sphere curvature)
+const IMAGERY_LIFT = 0.3;          // scene units above sphere (log depth resolves this)
+const IMAGERY_CANVAS_PX = IMAGERY_RING_TILES * 256;
+const IMAGERY_CACHE_MAX = 240;     // decoded 256px tiles (~63MB)
+const IMAGERY_REBUILD_FRAC = 0.6;  // recenter when pointer strays this many finest-zoom tiles
+const IMAGERY_FETCH_MAX = 16;      // concurrent tile fetches — a full 128-tile burst trips server rate limits
+const IMAGERY_FETCH_TIMEOUT = 15000; // abort hung fetches (they'd otherwise stay 'pending' forever)
+const IMAGERY_RETRY_MS = 15000;    // failed tiles become eligible to refetch after this
+const IMAGERY_PREFETCH_RADIUS = EARTH_RADIUS + 3000;  // warm the tile cache when the orbital camera is this low
+const IMAGERY_PREFETCH_MAX_ZOOM = 10; // prefetch only coarse rings — fine-ring windows churn while panning
+// 4x4 slot traversal order, center-first: the tiles under the pointer are
+// requested before the edges (the fetch queue preserves request order)
+const IMAGERY_SLOT_ORDER = (() => {
+    const c = (IMAGERY_RING_TILES - 1) / 2;
+    const slots = [];
+    for (let dy = 0; dy < IMAGERY_RING_TILES; dy++) {
+        for (let dx = 0; dx < IMAGERY_RING_TILES; dx++) {
+            slots.push({ dx, dy, d: (dx - c) * (dx - c) + (dy - c) * (dy - c) });
+        }
+    }
+    slots.sort((a, b) => a.d - b.d);
+    return slots;
+})();
+
+let imageryEnabled = true;
+let imageryRings = null;           // built lazily; finest (highest zoom) ring first
+let imageryCenterLat = null;       // center of the current ring layout
+let imageryCenterLon = null;
+let imageryWasActive = false;
+let imageryMaxVisibleZoom = IMAGERY_ZOOM_MAX;  // display cap (z11 in orbital preview, all in horizon)
+let imageryFetchActive = 0;        // in-flight fetches; the rest wait in the queue
+let imageryLastSweep = 0;          // last missing-tile retry sweep (ms)
+let imageryQueueDirty = false;     // queue needs a purge + priority re-sort before draining
+let imageryPrefetchSampleMs = 0;   // pointer settle detection for orbital prefetch
+let imageryPrefetchSampleLat = 0;
+let imageryPrefetchSampleLon = 0;
+const imageryFetchQueue = [];      // priority queue: highest score fetched first
+const imageryTileCache = new Map(); // "z/x/y" -> ImageBitmap | 'pending' | {errorAt}
+
+function lonToTileX(lon, z) {
+    return (lon + 180) / 360 * (1 << z);
+}
+
+function latToTileY(lat, z) {
+    const rad = THREE.MathUtils.degToRad(Math.max(-85.05, Math.min(85.05, lat)));
+    return (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * (1 << z);
+}
+
+function tileXToLon(x, z) {
+    return x / (1 << z) * 360 - 180;
+}
+
+function tileYToLat(y, z) {
+    const n = Math.PI * (1 - 2 * y / (1 << z));
+    return THREE.MathUtils.radToDeg(Math.atan(Math.sinh(n)));
+}
+
+/**
+ * Queue one imagery tile for download. A small concurrency cap keeps the
+ * initial ~128-tile burst from tripping server rate limits; failures are
+ * remembered briefly and the periodic sweep in updateImagery retries them.
+ */
+function requestImageryTile(z, x, y, key) {
+    const cached = imageryTileCache.get(key);
+    if (cached === 'pending') return;
+    if (cached && cached.width) return;  // already decoded
+    if (cached && cached.errorAt !== undefined &&
+        performance.now() - cached.errorAt < IMAGERY_RETRY_MS) return;
+
+    imageryTileCache.set(key, 'pending');
+    imageryFetchQueue.push({ z, x, y, key, score: 0 });  // scored at drain time
+    imageryQueueDirty = true;
+    // Defer the drain one microtask: a rebuild enqueues up to 128 tiles
+    // synchronously, and the sort must see the whole batch before dispatching
+    queueMicrotask(drainImageryFetchQueue);
+}
+
+/** Is this tile inside its zoom ring's current 4x4 window? (x wrap-aware) */
+function tileInRingWindow(ring, x, y) {
+    if (ring.ox === null) return false;
+    if (y < ring.oy || y >= ring.oy + IMAGERY_RING_TILES) return false;
+    const n = 1 << ring.zoom;
+    let dxw = x - (((ring.ox % n) + n) % n);
+    if (dxw < 0) dxw += n;
+    return dxw < IMAGERY_RING_TILES;
+}
+
+function drainImageryFetchQueue() {
+    if (imageryQueueDirty && imageryFetchQueue.length > 0) {
+        // Purge tiles whose ring window has moved away since they were queued
+        // (the pointer traveled) — un-mark them so a later redraw can re-request
+        // — and score survivors by apparent angular size from the CURRENT focus
+        // point: the tiles you're standing in first, then outward toward the
+        // horizon. All zoom levels compete in one queue (no ring-by-ring FIFO).
+        const px = lonToTileX(focusPointLon, IMAGERY_ZOOM_MAX);
+        const py = latToTileY(focusPointLat, IMAGERY_ZOOM_MAX);
+        const nf = 1 << IMAGERY_ZOOM_MAX;
+        let w = 0;
+        for (const t of imageryFetchQueue) {
+            const ring = imageryRings ? imageryRings[IMAGERY_ZOOM_MAX - t.z] : null;
+            if (!ring || !tileInRingWindow(ring, t.x, t.y)) {
+                if (imageryTileCache.get(t.key) === 'pending') imageryTileCache.delete(t.key);
+                continue;
+            }
+            const scale = 1 << (IMAGERY_ZOOM_MAX - t.z);   // tile size in finest-tile units
+            let ddx = (t.x + 0.5) * scale - px;
+            ddx -= Math.round(ddx / nf) * nf;              // shortest way around the antimeridian
+            const ddy = (t.y + 0.5) * scale - py;
+            t.score = scale / (Math.sqrt(ddx * ddx + ddy * ddy) + scale);
+            imageryFetchQueue[w++] = t;
+        }
+        imageryFetchQueue.length = w;
+        // Highest priority first; coarse zoom wins ties (a tile you're inside
+        // covers the whole screen and feeds the placeholder ancestors)
+        imageryFetchQueue.sort((a, b) => (b.score - a.score) || (a.z - b.z));
+    }
+    imageryQueueDirty = false;
+    while (imageryFetchActive < IMAGERY_FETCH_MAX && imageryFetchQueue.length > 0) {
+        fetchImageryTile(imageryFetchQueue.shift());
+    }
+}
+
+function fetchImageryTile(t) {
+    imageryFetchActive++;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), IMAGERY_FETCH_TIMEOUT);
+    fetch(IMAGERY_URL(t.z, t.y, t.x), { signal: ctrl.signal })
+        .then(r => { if (!r.ok) throw new Error('tile ' + r.status); return r.blob(); })
+        .then(blob => createImageBitmap(blob))
+        .then(bmp => {
+            imageryTileCache.delete(t.key);      // re-insert at the end (freshest)
+            imageryTileCache.set(t.key, bmp);
+            // FIFO eviction of decoded/errored entries (skip in-flight fetches)
+            while (imageryTileCache.size > IMAGERY_CACHE_MAX) {
+                let evicted = false;
+                for (const [k, v] of imageryTileCache) {
+                    if (v === 'pending') continue;
+                    imageryTileCache.delete(k);
+                    if (v && v.close) v.close();
+                    evicted = true;
+                    break;
+                }
+                if (!evicted) break;
+            }
+            drawTileIntoRings(t.z, t.x, t.y, bmp);
+        })
+        .catch(() => imageryTileCache.set(t.key, { errorAt: performance.now() }))
+        .finally(() => {
+            clearTimeout(timer);
+            imageryFetchActive--;
+            drainImageryFetchQueue();
+        });
+}
+
+/** Paint an arrived tile into the matching-zoom ring, if it's still in view. */
+function drawTileIntoRings(z, x, y, bmp) {
+    if (!imageryRings) return;
+    const n = 1 << z;
+    for (const ring of imageryRings) {
+        if (ring.zoom !== z) continue;
+        for (let dy = 0; dy < IMAGERY_RING_TILES; dy++) {
+            if (ring.oy + dy !== y) continue;
+            for (let dx = 0; dx < IMAGERY_RING_TILES; dx++) {
+                const tx = (((ring.ox + dx) % n) + n) % n;
+                if (tx !== x) continue;
+                ring.ctx.drawImage(bmp, dx * 256, dy * 256);
+                ring.dirtyTex = true;
+                ring.missing = Math.max(0, ring.missing - 1);
+            }
+        }
+    }
+}
+
+// -------------------- Real elevation (terrarium tiles) --------------------
+// AWS Terrain Tiles (open data, no key): same Web Mercator z/x/y scheme as
+// the imagery. Each ring samples heights at (ring.zoom - 2), so one 256px
+// elevation tile spans a 4x4 block of imagery tiles — a ring needs at most 4.
+
+const ELEVATION_URL = (z, x, y) =>
+    `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+const ELEVATION_ZOOM_DELTA = 2;
+const ELEVATION_CACHE_MAX = 96;       // Float32 tiles (256KB each, ~25MB)
+const ELEVATION_EXAGGERATION = 1.0;   // true vertical scale
+const ELEVATION_MORPH_START = 0.7;    // outer band blends to coarser data (ring seam matching)
+const METERS_PER_SCENE_UNIT = EARTH_RADIUS_KM * 1000 / EARTH_RADIUS;  // ~1061.8
+
+let elevationEnabled = true;
+let elevationCamLift = 0;             // smoothed terrain height under the camera (scene units)
+let elevationDecodeCanvas = null;
+const elevationTileCache = new Map(); // "z/x/y" -> Float32Array(65536) meters | 'pending' | {errorAt}
+
+/**
+ * Fetch + decode one terrarium tile. These PNGs are DATA: color management
+ * must stay disabled or the red channel shifts, and 1 unit of red = 256 m.
+ */
+function fetchElevationTile(ze, x, y) {
+    const n = 1 << ze;
+    x = ((x % n) + n) % n;
+    if (y < 0 || y >= n) return;
+    const key = ze + '/' + x + '/' + y;
+    const cached = elevationTileCache.get(key);
+    if (cached instanceof Float32Array || cached === 'pending') return;
+    if (cached && cached.errorAt !== undefined &&
+        performance.now() - cached.errorAt < IMAGERY_RETRY_MS) return;
+
+    elevationTileCache.set(key, 'pending');
+    fetch(ELEVATION_URL(ze, x, y))
+        .then(r => { if (!r.ok) throw new Error('tile ' + r.status); return r.blob(); })
+        .then(blob => createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' }))
+        .then(bmp => {
+            if (!elevationDecodeCanvas) {
+                elevationDecodeCanvas = document.createElement('canvas');
+                elevationDecodeCanvas.width = 256;
+                elevationDecodeCanvas.height = 256;
+            }
+            const ctx = elevationDecodeCanvas.getContext('2d', { willReadFrequently: true });
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(bmp, 0, 0);
+            bmp.close();
+            const data = ctx.getImageData(0, 0, 256, 256).data;
+            const heights = new Float32Array(256 * 256);
+            for (let i = 0, p = 0; i < heights.length; i++, p += 4) {
+                heights[i] = data[p] * 256 + data[p + 1] + data[p + 2] / 256 - 32768;
+            }
+            elevationTileCache.delete(key);
+            elevationTileCache.set(key, heights);
+            while (elevationTileCache.size > ELEVATION_CACHE_MAX) {
+                let evicted = false;
+                for (const [k, v] of elevationTileCache) {
+                    if (v === 'pending') continue;
+                    elevationTileCache.delete(k);
+                    evicted = true;
+                    break;
+                }
+                if (!evicted) break;
+            }
+            // Heights re-applied next frame (spread across frames in updateImagery)
+            if (imageryRings) {
+                for (const ring of imageryRings) ring.elevDirty = true;
+            }
+        })
+        .catch(() => elevationTileCache.set(key, { errorAt: performance.now() }));
+}
+
+/** Queue the elevation tiles covering a ring's window (plus the morph level). */
+function ensureRingElevationTiles(ring) {
+    if (!elevationEnabled || ring.ox === null) return;
+    const span = 1 << ELEVATION_ZOOM_DELTA;   // imagery tiles per elevation tile
+    const ze = ring.zoom - ELEVATION_ZOOM_DELTA;
+    for (let ty = Math.floor(ring.oy / span); ty <= Math.floor((ring.oy + IMAGERY_RING_TILES - 1) / span); ty++) {
+        for (let tx = Math.floor(ring.ox / span); tx <= Math.floor((ring.ox + IMAGERY_RING_TILES - 1) / span); tx++) {
+            fetchElevationTile(ze, tx, ty);
+        }
+    }
+    // The outer morph band samples the next-coarser level too
+    if (ring.zoom > IMAGERY_ZOOM_MIN) {
+        const span2 = span * 2;
+        for (let ty = Math.floor(ring.oy / span2); ty <= Math.floor((ring.oy + IMAGERY_RING_TILES - 1) / span2); ty++) {
+            for (let tx = Math.floor(ring.ox / span2); tx <= Math.floor((ring.ox + IMAGERY_RING_TILES - 1) / span2); tx++) {
+                fetchElevationTile(ze - 1, tx, ty);
+            }
+        }
+    }
+}
+
+/**
+ * Best-effort height: sample the finest CACHED zoom at or below zeMax.
+ * Returns null when no level is cached (caller should hold its last value
+ * rather than assume sea level).
+ */
+function sampleElevationBestEffort(lat, lon, zeMax, zeMin) {
+    for (let ze = zeMax; ze >= zeMin; ze--) {
+        const n = 1 << ze;
+        let ty = Math.floor(latToTileY(lat, ze));
+        if (ty < 0) ty = 0;
+        if (ty > n - 1) ty = n - 1;
+        const wx = ((Math.floor(lonToTileX(lon, ze)) % n) + n) % n;
+        if (elevationTileCache.get(ze + '/' + wx + '/' + ty) instanceof Float32Array) {
+            return sampleElevationMeters(lat, lon, ze);
+        }
+    }
+    return null;
+}
+
+/**
+ * Bilinear height sample (meters) from cached tiles at a given zoom.
+ * Returns 0 where data hasn't arrived yet (rebuilt when it lands).
+ */
+function sampleElevationMeters(lat, lon, ze) {
+    const n = 1 << ze;
+    const xf = lonToTileX(lon, ze);
+    const yf = latToTileY(lat, ze);
+    const tx = Math.floor(xf);
+    let ty = Math.floor(yf);
+    if (ty < 0) ty = 0;
+    if (ty > n - 1) ty = n - 1;
+    const wx = ((tx % n) + n) % n;
+    const tile = elevationTileCache.get(ze + '/' + wx + '/' + ty);
+    if (!(tile instanceof Float32Array)) return 0;
+
+    // Sample at pixel centers, clamped to tile edges (1px seam error is negligible)
+    let u = (xf - tx) * 256 - 0.5;
+    let v = (yf - ty) * 256 - 0.5;
+    u = Math.max(0, Math.min(254.999, u));
+    v = Math.max(0, Math.min(254.999, v));
+    const i0 = Math.floor(u), j0 = Math.floor(v);
+    const fu = u - i0, fv = v - j0;
+    const r0 = j0 * 256 + i0;
+    const h00 = tile[r0], h10 = tile[r0 + 1];
+    const h01 = tile[r0 + 256], h11 = tile[r0 + 257];
+    return (h00 * (1 - fu) + h10 * fu) * (1 - fv) + (h01 * (1 - fu) + h11 * fu) * fv;
+}
+
+/**
+ * Apply the same eclipse-darkening shader injection the Earth material uses
+ * (GLSL kept in sync with createEarth). Shares its uniform objects, so
+ * per-frame sun/moon updates propagate automatically.
+ */
+function applyEclipseDarkeningToMaterial(material) {
+    material.onBeforeCompile = (shader) => {
+        shader.uniforms.sunDirection = earthMaterial.userData.sunDirection;
+        shader.uniforms.moonPosition = earthMaterial.userData.moonPosition;
+        shader.uniforms.moonRadius = earthMaterial.userData.moonRadius;
+        shader.uniforms.sunAngularRadius = earthMaterial.userData.sunAngularRadius;
+
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <common>',
+            `#include <common>
+            uniform vec3 sunDirection;
+            uniform vec3 moonPosition;
+            uniform float moonRadius;
+            uniform float sunAngularRadius;
+            varying vec3 vWorldNormal;
+            varying vec3 vWorldPosition;
+
+            float calculateEclipseCoverage(vec3 worldPos, vec3 moonPos, vec3 sunDir, float moonRad) {
+                vec3 toMoon = moonPos - worldPos;
+                float distToMoon = length(toMoon);
+                vec3 moonDir = toMoon / distToMoon;
+                float moonAngularRadius = atan(moonRad / distToMoon);
+                float angularSep = acos(clamp(dot(moonDir, sunDir), -1.0, 1.0));
+                if (dot(moonDir, sunDir) < 0.0) return 0.0;
+                float sumRadii = sunAngularRadius + moonAngularRadius;
+                float diffRadii = abs(sunAngularRadius - moonAngularRadius);
+                if (angularSep >= sumRadii) {
+                    return 0.0;
+                } else if (angularSep <= diffRadii) {
+                    float smallerArea = 3.14159 * min(sunAngularRadius, moonAngularRadius) * min(sunAngularRadius, moonAngularRadius);
+                    float sunArea = 3.14159 * sunAngularRadius * sunAngularRadius;
+                    return smallerArea / sunArea;
+                } else {
+                    float r1 = sunAngularRadius;
+                    float r2 = moonAngularRadius;
+                    float d = angularSep;
+                    float part1 = r1 * r1 * acos((d * d + r1 * r1 - r2 * r2) / (2.0 * d * r1));
+                    float part2 = r2 * r2 * acos((d * d + r2 * r2 - r1 * r1) / (2.0 * d * r2));
+                    float part3 = 0.5 * sqrt((-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2));
+                    float overlapArea = part1 + part2 - part3;
+                    float sunArea = 3.14159 * r1 * r1;
+                    return clamp(overlapArea / sunArea, 0.0, 1.0);
+                }
+            }
+            `
+        );
+
+        shader.vertexShader = shader.vertexShader.replace(
+            '#include <common>',
+            `#include <common>
+            varying vec3 vWorldNormal;
+            varying vec3 vWorldPosition;
+            `
+        );
+        shader.vertexShader = shader.vertexShader.replace(
+            '#include <worldpos_vertex>',
+            `#include <worldpos_vertex>
+            vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+            vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+            `
+        );
+
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <map_fragment>',
+            `#include <map_fragment>
+            float waterness = smoothstep(0.02, 0.10, diffuseColor.b - max(diffuseColor.r, diffuseColor.g));
+            float sunDot = dot(vWorldNormal, normalize(sunDirection));
+            float dayFactor = smoothstep(-0.1, 0.2, sunDot);
+            // Ground-relative sun altitude: sunset effects follow the LOCATION's
+            // sunset, not the slope orientation (terrain normals tilt sunward)
+            float groundDot = dot(normalize(vWorldPosition), normalize(sunDirection));
+            float groundDay = smoothstep(-0.1, 0.2, groundDot);
+            float eclipseCoverage = calculateEclipseCoverage(vWorldPosition, moonPosition, normalize(sunDirection), moonRadius);
+            float eclipseDarkening = 1.0 - eclipseCoverage * 0.95;
+            diffuseColor.rgb *= mix(1.0, eclipseDarkening, dayFactor);
+            // Civil twilight: soft, near-neutral brightness ramp past the local
+            // terminator (sunset COLOR lives in the direct light, not here)
+            float twilightGlow = smoothstep(-0.12, 0.0, groundDot) * (1.0 - groundDay);
+            diffuseColor.rgb *= 1.0 + twilightGlow * vec3(0.50, 0.44, 0.36);
+            `
+        );
+
+        // Water-only specular (kept in sync with the Earth material injection)
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <roughnessmap_fragment>',
+            `#include <roughnessmap_fragment>
+            roughnessFactor = mix(1.0, 0.45, waterness);
+            `
+        );
+
+        // Ocean glint specular rolloff (kept in sync with the Earth injection)
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <aomap_fragment>',
+            `#include <aomap_fragment>
+            reflectedLight.directSpecular /= (vec3(1.0) + reflectedLight.directSpecular);
+            `
+        );
+
+        // Earth's own shadow (kept in sync with the Earth injection): direct
+        // sun gates off just past local sunset — critical here because sunward
+        // terrain slopes would otherwise stay lambert-lit with the sun far
+        // below the horizon. Small negative margin = alpenglow on peaks.
+        shader.fragmentShader = shader.fragmentShader
+            .split('RE_Direct( directLight, geometry, material, reflectedLight );')
+            .join(`{
+                float gSunDot = dot(normalize(vWorldPosition), normalize(sunDirection));
+                directLight.color *= smoothstep(-0.035, 0.01, gSunDot);
+                RE_Direct( directLight, geometry, material, reflectedLight );
+            }`);
+    };
+}
+
+/**
+ * Create the ring meshes once: fixed-capacity grid geometry per zoom level,
+ * a 1024px composited canvas texture each, radial (spherical) normals so
+ * lighting matches the globe exactly, and the eclipse shader injection.
+ */
+function ensureImageryRings() {
+    if (imageryRings) return;
+    imageryRings = [];
+
+    const cells = IMAGERY_RING_TILES * IMAGERY_SUBDIV;   // 32 per side
+    const verts = cells + 1;                             // 33 per side
+
+    for (let z = IMAGERY_ZOOM_MAX; z >= IMAGERY_ZOOM_MIN; z--) {
+        const canvas = document.createElement('canvas');
+        canvas.width = IMAGERY_CANVAS_PX;
+        canvas.height = IMAGERY_CANVAS_PX;
+        const ctx = canvas.getContext('2d');
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+        const material = new THREE.MeshStandardMaterial({
+            map: texture,
+            roughness: 0.8,
+            metalness: 0.0,
+            alphaTest: 0.5,           // not-yet-loaded areas discard -> globe shows through
+            side: THREE.DoubleSide
+        });
+        applyEclipseDarkeningToMaterial(material);
+
+        const geometry = new THREE.BufferGeometry();
+        const posAttr = new THREE.BufferAttribute(new Float32Array(verts * verts * 3), 3);
+        const norAttr = new THREE.BufferAttribute(new Float32Array(verts * verts * 3), 3);
+        posAttr.setUsage(THREE.DynamicDrawUsage);
+        norAttr.setUsage(THREE.DynamicDrawUsage);
+        // UVs are static: the grid always spans the whole canvas (row 0 = north)
+        const uvArr = new Float32Array(verts * verts * 2);
+        let u2 = 0;
+        for (let j = 0; j < verts; j++) {
+            for (let i = 0; i < verts; i++) {
+                uvArr[u2++] = i / cells;
+                uvArr[u2++] = 1 - j / cells;
+            }
+        }
+        geometry.setAttribute('position', posAttr);
+        geometry.setAttribute('normal', norAttr);
+        geometry.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
+        const indexAttr = new THREE.BufferAttribute(new Uint16Array(cells * cells * 6), 1);
+        indexAttr.setUsage(THREE.DynamicDrawUsage);
+        geometry.setIndex(indexAttr);
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;   // shadow-map texels are ~820 units; eclipse darkening is shader-based
+        mesh.visible = false;
+        scene.add(mesh);
+
+        imageryRings.push({
+            zoom: z, ox: null, oy: null,
+            canvas, ctx, texture, mesh, geometry,
+            posAttr, norAttr, indexAttr, dirtyTex: false, missing: 0,
+            elevDirty: false, holeRect: null
+        });
+    }
+}
+
+/**
+ * Re-center the ring stack on a point: snap each ring to its own tile grid,
+ * cut each coarser ring's hole exactly where the next finer ring sits, and
+ * redraw canvases whose tile window moved (cache first, network for gaps).
+ */
+function rebuildImageryRings(lat, lon) {
+    imageryCenterLat = lat;
+    imageryCenterLon = lon;
+
+    let childRect = null;   // finer ring's tile rect, in the finer ring's zoom
+    const toRedraw = [];
+    for (const ring of imageryRings) {
+        const z = ring.zoom;
+        const n = 1 << z;
+        const half = IMAGERY_RING_TILES / 2;
+        const ox = Math.round(lonToTileX(lon, z)) - half;
+        let oy = Math.round(latToTileY(lat, z)) - half;
+        oy = Math.max(0, Math.min(Math.max(0, n - IMAGERY_RING_TILES), oy));
+
+        const originChanged = ox !== ring.ox || oy !== ring.oy;
+        ring.ox = ox;
+        ring.oy = oy;
+        // Rings above the display cap still track their window and fetch (cache
+        // warm for the horizon drop) but get no geometry and punch no hole —
+        // the finest DISPLAYED ring renders as a full square
+        if (ring.zoom <= imageryMaxVisibleZoom) {
+            ring.holeRect = childRect;
+            ring.elevDirty = false;
+            rebuildRingGeometry(ring, childRect);
+            childRect = { x0: ox, y0: oy, x1: ox + IMAGERY_RING_TILES, y1: oy + IMAGERY_RING_TILES };
+        }
+        if (originChanged) {
+            toRedraw.push(ring);
+            ensureRingElevationTiles(ring);
+        }
+    }
+    // Redraw coarse-to-fine so the wide-coverage tiles enter the fetch queue
+    // first: the whole view fills fast, then sharpens underfoot
+    for (let i = toRedraw.length - 1; i >= 0; i--) {
+        redrawRingCanvas(toRedraw[i]);
+    }
+}
+
+/**
+ * Rewrite one ring's vertices (grid over its tile window, projected onto the
+ * sphere and displaced by real terrain height) and indices (skipping the
+ * cells the finer ring covers). Normals come from the terrain surface, which
+ * is what makes low sun rake across slopes; a flat ring's computed normals
+ * converge to the sphere's radials anyway.
+ */
+function rebuildRingGeometry(ring, childRect) {
+    const z = ring.zoom;
+    const cells = IMAGERY_RING_TILES * IMAGERY_SUBDIV;
+    const verts = cells + 1;
+    const pos = ring.posAttr.array;
+    const ze = z - ELEVATION_ZOOM_DELTA;
+    const morphable = elevationEnabled && z > IMAGERY_ZOOM_MIN;
+    const hScale = ELEVATION_EXAGGERATION / METERS_PER_SCENE_UNIT;
+
+    let p = 0;
+    for (let j = 0; j < verts; j++) {
+        const lat = tileYToLat(ring.oy + j / IMAGERY_SUBDIV, z);
+        const ey = Math.abs(j / cells - 0.5) * 2;
+        for (let i = 0; i < verts; i++) {
+            const lon = tileXToLon(ring.ox + i / IMAGERY_SUBDIV, z);
+            // Real terrain height (sea clamped to 0). The outer band morphs
+            // toward the next-coarser data so heights agree where this ring
+            // meets the coarser one outside it (no cracks at seams).
+            let h = 0;
+            if (elevationEnabled) {
+                h = Math.max(0, sampleElevationMeters(lat, lon, ze));
+                if (morphable) {
+                    const ef = Math.max(Math.abs(i / cells - 0.5) * 2, ey);
+                    if (ef > ELEVATION_MORPH_START) {
+                        const t = (ef - ELEVATION_MORPH_START) / (1 - ELEVATION_MORPH_START);
+                        h += (Math.max(0, sampleElevationMeters(lat, lon, ze - 1)) - h) * t;
+                    }
+                }
+            }
+            latLonToCartesian(lat, lon, EARTH_RADIUS + IMAGERY_LIFT + h * hScale, _tv1);
+            pos[p++] = _tv1.x;
+            pos[p++] = _tv1.y;
+            pos[p++] = _tv1.z;
+        }
+    }
+
+    // Hole bounds in this ring's grid cells (half-tile granularity: the child
+    // sits on the twice-finer grid, and SUBDIV cells per tile keeps these integral)
+    let hx0 = -1, hx1 = -1, hy0 = -1, hy1 = -1;
+    if (childRect) {
+        hx0 = (childRect.x0 / 2 - ring.ox) * IMAGERY_SUBDIV;
+        hx1 = (childRect.x1 / 2 - ring.ox) * IMAGERY_SUBDIV;
+        hy0 = (childRect.y0 / 2 - ring.oy) * IMAGERY_SUBDIV;
+        hy1 = (childRect.y1 / 2 - ring.oy) * IMAGERY_SUBDIV;
+    }
+    const idx = ring.indexAttr.array;
+    let k = 0;
+    for (let j = 0; j < cells; j++) {
+        for (let i = 0; i < cells; i++) {
+            if (i >= hx0 && i < hx1 && j >= hy0 && j < hy1) continue;
+            const a = j * verts + i, b = a + 1, c = a + verts, d = c + 1;
+            idx[k++] = a; idx[k++] = c; idx[k++] = b;
+            idx[k++] = b; idx[k++] = c; idx[k++] = d;
+        }
+    }
+    // Degenerate tail: computeVertexNormals reads the whole index buffer,
+    // not just the draw range
+    idx.fill(0, k);
+    ring.geometry.setDrawRange(0, k);
+    ring.geometry.computeVertexNormals();
+    ring.posAttr.needsUpdate = true;
+    ring.norAttr.needsUpdate = true;
+    ring.indexAttr.needsUpdate = true;
+    ring.geometry.computeBoundingSphere();
+}
+
+/**
+ * Redraw a ring's canvas from the tile cache; request whatever is missing.
+ * clearCanvas=false (retry sweeps) repaints/requests without wiping slots that
+ * are already showing pixels, and tracks ring.missing for the sweep to watch.
+ */
+function redrawRingCanvas(ring, clearCanvas = true) {
+    const z = ring.zoom;
+    const n = 1 << z;
+    if (clearCanvas) ring.ctx.clearRect(0, 0, IMAGERY_CANVAS_PX, IMAGERY_CANVAS_PX);
+    let drew = false;
+    let missing = 0;
+    for (const slot of IMAGERY_SLOT_ORDER) {            // center-first request order
+        const dx = slot.dx, dy = slot.dy;
+        const ty = ring.oy + dy;
+        if (ty < 0 || ty >= n) continue;                // beyond the poles: leave transparent
+        const tx = (((ring.ox + dx) % n) + n) % n;      // wrap across the antimeridian
+        const key = z + '/' + tx + '/' + ty;
+        const cached = imageryTileCache.get(key);
+        if (cached && cached.width) {
+            ring.ctx.drawImage(cached, dx * 256, dy * 256);
+            drew = true;
+        } else {
+            // Placeholder on fresh canvases: upscale the matching quadrant of
+            // the nearest cached ancestor tile (coarse rings load/prefetch
+            // first) so waiting slots show blurry imagery instead of holes
+            if (clearCanvas) {
+                for (let k = 1; k <= 4; k++) {
+                    const anc = imageryTileCache.get((z - k) + '/' + (tx >> k) + '/' + (ty >> k));
+                    if (anc && anc.width) {
+                        const s = 256 >> k;
+                        ring.ctx.drawImage(anc,
+                            (tx & ((1 << k) - 1)) * s, (ty & ((1 << k) - 1)) * s, s, s,
+                            dx * 256, dy * 256, 256, 256);
+                        drew = true;
+                        break;
+                    }
+                }
+            }
+            missing++;
+            requestImageryTile(z, tx, ty, key);
+        }
+    }
+    ring.missing = missing;
+    if (drew || clearCanvas) ring.dirtyTex = true;
+}
+
+/**
+ * Orbital-mode cache warmer: keep the coarse rings' tile windows centered on
+ * the focus point and their fetches flowing before the user ever drops to the
+ * surface. Geometry and visibility are untouched (activation does a full
+ * rebuild). Fine rings are skipped — their windows shift on every small pan
+ * and would churn the network for nothing.
+ */
+function prefetchImageryTiles(lat, lon) {
+    const nowMs = performance.now();
+    const sweepDue = nowMs - imageryLastSweep > 1000;
+    if (sweepDue) imageryLastSweep = nowMs;
+    for (const ring of imageryRings) {
+        if (ring.zoom > IMAGERY_PREFETCH_MAX_ZOOM) continue;
+        const z = ring.zoom;
+        const n = 1 << z;
+        const half = IMAGERY_RING_TILES / 2;
+        const ox = Math.round(lonToTileX(lon, z)) - half;
+        let oy = Math.round(latToTileY(lat, z)) - half;
+        oy = Math.max(0, Math.min(Math.max(0, n - IMAGERY_RING_TILES), oy));
+        if (ox !== ring.ox || oy !== ring.oy) {
+            ring.ox = ox;
+            ring.oy = oy;
+            redrawRingCanvas(ring);
+            ensureRingElevationTiles(ring);
+        } else if (sweepDue && ring.missing > 0) {
+            redrawRingCanvas(ring, false);
+        }
+    }
+}
+
+/**
+ * Per-frame imagery management: fades the globe's fake displacement out under
+ * the (flat) rings, shows/hides the rings with view mode, recenters the stack
+ * when the focus point moves, and batches canvas->GPU uploads once per frame.
+ */
+function updateImagery() {
+    // Ground-detail blend: 1 in horizon mode, and also ramps in as the orbital
+    // camera descends — sharp tiles + real elevation appear well before the
+    // horizon transition instead of at it
+    const orbitalGround = 1 - THREE.MathUtils.smoothstep(cameraRadius, IMAGERY_ORBITAL_SHOW, IMAGERY_ORBITAL_FADE);
+    const groundBlend = Math.max(horizonBlendValue, orbitalGround);
+    const active = imageryEnabled && (horizonBlendValue > 0.05 || cameraRadius < IMAGERY_ORBITAL_SHOW);
+
+    // Fake displacement melts away BEFORE the rings appear (they carry real
+    // elevation; the phony 5-unit bumps would poke through them) — and it also
+    // keeps the low horizon camera from ending up inside the bumps
+    if (earthMaterial) {
+        earthMaterial.displacementScale = 5 * (1 - groundBlend);
+    }
+
+    // Coastline/lake/river lines dissolve on the same ramp: Natural Earth 10m
+    // is generalized ~1 km cartography — crisp against the 2.5 km/px globe,
+    // visibly misaligned against 10-75 m/px ring imagery (the imagery IS the
+    // coastline there). With imagery off they stay, even in horizon view.
+    const lineFade = imageryEnabled ? 1 - groundBlend : 1;
+    if (coastlineMesh) {
+        coastlineMesh.material.uniforms.fade.value = lineFade;
+        coastlineMesh.visible = coastlinesVisible && lineFade > 0.01;
+    }
+    if (lakesMesh) {
+        lakesMesh.material.uniforms.fade.value = lineFade;
+        lakesMesh.visible = waterLinesVisible && lineFade > 0.01;
+    }
+    if (riversMesh) {
+        riversMesh.material.uniforms.fade.value = lineFade;
+        riversMesh.visible = waterLinesVisible && lineFade > 0.01;
+    }
+
+    if (!active) {
+        if (imageryRings) {
+            for (const ring of imageryRings) ring.mesh.visible = false;
+        }
+        imageryWasActive = false;
+        // Warm start: when the orbital camera is low enough that a surface
+        // drop is likely, start fetching around the focus point so the fall
+        // lands on ground that is already sharp. Only while the pointer is
+        // SETTLED — chasing a drag would queue tiles along the whole path.
+        if (imageryEnabled && cameraRadius < IMAGERY_PREFETCH_RADIUS) {
+            const nowMs = performance.now();
+            if (nowMs - imageryPrefetchSampleMs > 400) {
+                const dLatMoved = Math.abs(focusPointLat - imageryPrefetchSampleLat);
+                let dLonMoved = Math.abs(focusPointLon - imageryPrefetchSampleLon);
+                if (dLonMoved > 180) dLonMoved = 360 - dLonMoved;
+                imageryPrefetchSampleMs = nowMs;
+                imageryPrefetchSampleLat = focusPointLat;
+                imageryPrefetchSampleLon = focusPointLon;
+                if (dLatMoved + dLonMoved < 0.15) {
+                    ensureImageryRings();
+                    prefetchImageryTiles(focusPointLat, focusPointLon);
+                }
+            }
+        }
+        return;
+    }
+
+    ensureImageryRings();
+
+    // Orbital preview: display only as fine a ring as the screen can resolve
+    // from this altitude — finer zooms add zero visible sharpness but their
+    // deep-zoom ocean tiles are toned differently and read as dark squares at
+    // the pointer. Hidden rings still track the pointer and FETCH (cache warm
+    // for the horizon drop).
+    let maxVisibleZoom = IMAGERY_ZOOM_MAX;
+    if (horizonBlendValue <= 0.05) {
+        const altKm = Math.max(20, cameraRadius - EARTH_RADIUS) / KM_TO_SCENE;
+        maxVisibleZoom = THREE.MathUtils.clamp(
+            Math.floor(Math.log2(40075 / (256 * altKm * 0.0015))),   // ~screen px ground size at 75° fov
+            IMAGERY_ZOOM_MIN, IMAGERY_ORBITAL_MAX_ZOOM);
+    }
+
+    // Recenter when the focus point strays from the layout center
+    let needsBuild = !imageryWasActive || imageryCenterLat === null ||
+        maxVisibleZoom !== imageryMaxVisibleZoom;
+    if (!needsBuild) {
+        const zf = IMAGERY_ZOOM_MAX;
+        const nf = 1 << zf;
+        let dx = lonToTileX(focusPointLon, zf) - lonToTileX(imageryCenterLon, zf);
+        dx -= Math.round(dx / nf) * nf;   // shortest way around the antimeridian
+        const dy = latToTileY(focusPointLat, zf) - latToTileY(imageryCenterLat, zf);
+        needsBuild = Math.abs(dx) > IMAGERY_REBUILD_FRAC || Math.abs(dy) > IMAGERY_REBUILD_FRAC;
+    }
+    if (needsBuild) {
+        imageryMaxVisibleZoom = maxVisibleZoom;
+        rebuildImageryRings(focusPointLat, focusPointLon);
+    }
+
+    // Retry sweep: once a second, refill rings with holes (failed or timed-out
+    // fetches). Errors older than IMAGERY_RETRY_MS become eligible to refetch;
+    // clearCanvas=false so slots already showing pixels are never wiped.
+    // Elevation tiles ride the same cadence (no-op once cached).
+    const nowMs = performance.now();
+    if (nowMs - imageryLastSweep > 1000) {
+        imageryLastSweep = nowMs;
+        for (const ring of imageryRings) {
+            if (ring.missing > 0) redrawRingCanvas(ring, false);
+            ensureRingElevationTiles(ring);
+        }
+    }
+
+    // Re-apply heights as elevation tiles arrive — at most 2 rings per frame
+    // so a burst of arrivals never causes a visible hitch
+    let elevRebuilds = 0;
+    for (const ring of imageryRings) {
+        if (ring.elevDirty && ring.zoom <= imageryMaxVisibleZoom && elevRebuilds < 2) {
+            ring.elevDirty = false;
+            elevRebuilds++;
+            rebuildRingGeometry(ring, ring.holeRect);
+        }
+    }
+
+    // Camera and ground UI ride the local terrain height. Sample the finest
+    // CACHED elevation (coarse fallback) and hold the last lift while no data
+    // exists at all — never dive to sea level and rebound when tiles land.
+    // Rise faster than descend so arriving terrain can't swallow the camera.
+    if (elevationEnabled) {
+        const hM = sampleElevationBestEffort(focusPointLat, focusPointLon,
+            IMAGERY_ZOOM_MAX - ELEVATION_ZOOM_DELTA, IMAGERY_ZOOM_MIN - ELEVATION_ZOOM_DELTA);
+        if (hM !== null) {
+            const liftTarget = Math.max(0, hM) * ELEVATION_EXAGGERATION / METERS_PER_SCENE_UNIT;
+            const rate = liftTarget > elevationCamLift ? 0.2 : 0.06;
+            elevationCamLift += (liftTarget - elevationCamLift) * rate;
+        }
+    } else {
+        elevationCamLift *= 0.9;
+    }
+
+    for (const ring of imageryRings) {
+        ring.mesh.visible = ring.zoom <= imageryMaxVisibleZoom;
+        if (ring.dirtyTex) {
+            ring.texture.needsUpdate = true;
+            ring.dirtyTex = false;
+        }
+    }
+    imageryWasActive = true;
 }
 
 /**
@@ -6484,6 +7449,25 @@ function createFocusMarker() {
 
     scene.add(compassGroup);
 
+    // Scale the ground compass to a modest disc at your feet: its ring lands
+    // GROUND_COMPASS_DEPRESSION_DEG below the horizontal seen from the
+    // standing eye height (geometry was authored for the old 17 km camera)
+    const eyeAboveCompass = HORIZON_CAMERA_HEIGHT - EARTH_RADIUS - GROUND_UI_RAISE;
+    const compassScale = eyeAboveCompass /
+        (Math.tan(THREE.MathUtils.degToRad(GROUND_COMPASS_DEPRESSION_DEG)) * ringOuterRadius);
+    compassGroup.scale.setScalar(compassScale);
+    sunLineGroup.scale.setScalar(compassScale);
+    moonLineGroup.scale.setScalar(compassScale);
+
+    // Instrument overlay: the compass must stay readable when 3D terrain
+    // rises inside its ring — draw it over the ground (no depth test), same
+    // approach as the coastline overlay
+    for (const grp of [compassGroup, sunLineGroup, moonLineGroup]) {
+        grp.traverse(obj => {
+            if (obj.material) obj.material.depthTest = false;
+        });
+    }
+
     // Store compass groups and fill refs for updates
     focusMarker.userData.sunLineGroup = sunLineGroup;
     focusMarker.userData.moonLineGroup = moonLineGroup;
@@ -6940,7 +7924,7 @@ function updatePlanetPositions() {
  * Returns { occluded: boolean, altitude: number (radians, negative = below horizon) }
  */
 // Horizon dip angle: from camera height, the visible horizon is below geometric horizon
-const HORIZON_DIP_ANGLE = -Math.acos(EARTH_RADIUS / HORIZON_CAMERA_HEIGHT); // ~-4.18 degrees
+const HORIZON_DIP_ANGLE = -Math.acos(EARTH_RADIUS / HORIZON_CAMERA_HEIGHT); // ~-1.05 degrees at 1 unit up
 
 const _ghostResult = { occluded: false, altitude: 0 };
 function getGhostOcclusion(bodyWorldPos, bodyLatLon) {
@@ -7152,6 +8136,7 @@ function plotCities() {
             instanceIndex: i,
             visible: true,
             currentScale: 1,
+            currentRaise: 3,
             userData: { city: city, labelSprite: labelSprite, originalColor: null }
         });
     });
@@ -7380,8 +8365,15 @@ function updateLabelScales() {
     const focusLon = focusPointLon;
     const focusPos = latLonToCartesian(focusLat, focusLon, EARTH_RADIUS, _tv4);
 
-    // Calculate marker scale based on camera distance
-    const markerScale = Math.max(0.5, cameraDistance * 0.00015);
+    // Marker scale: distance-based far out, shrinking toward constant angular
+    // size as the camera descends below the old ≥1000 km design altitude;
+    // released in horizon mode where the signpost rules below take over
+    const groundShrink = THREE.MathUtils.lerp(
+        THREE.MathUtils.clamp((cameraDistance - EARTH_RADIUS) / 941, 0.05, 1),
+        1,
+        Math.min(1, horizonBlendValue * 2)
+    );
+    const markerScale = Math.max(0.5, cameraDistance * 0.00015) * groundShrink;
 
     // Calculate label scale based on camera distance
     const labelScale = Math.max(0.3, Math.min(1.5, cameraDistance * 0.0003));
@@ -7451,21 +8443,38 @@ function updateLabelScales() {
         // Fade markers near horizon
         const horizonFade = Math.max(0, Math.min(1, (dotProduct + 0.15) / 0.3));
 
-        // Set marker visibility
-        const isVisible = citySpheresVisible && isOnVisibleSide;
+        // Set marker visibility (hidden during the cinematic fall/liftoff —
+        // a fixed-size marker looms as the camera dives past it)
+        const isVisible = citySpheresVisible && isOnVisibleSide && !isViewTransitioning;
         marker.visible = isVisible;
 
-        // Smaller markers in horizon view for signpost effect
+        // Horizon mode: per-marker constant angular size (scale ∝ distance,
+        // quantized to 0.5% steps to limit instance-matrix churn) — the city
+        // you're standing next to stays a dot instead of becoming a moon
         const horizonFactor = Math.min(1, horizonBlendValue * 2);
-        const adjustedMarkerScale = markerScale * (1 - horizonFactor * 0.6);
+        const horizonMarkerScale = Math.round(THREE.MathUtils.clamp(
+            marker.position.distanceTo(camera.position) * 0.0008, 0.02, 0.5) * 200) / 200;
+        const adjustedMarkerScale = markerScale * (1 - horizonFactor) + horizonMarkerScale * horizonFactor;
 
-        // Update instance matrix (scale 0 to hide, adjusted scale to show)
+        // Update instance matrix (scale 0 to hide, adjusted scale to show).
+        // In horizon mode the marker re-anchors to local terrain: its creation
+        // height (+3, for orbital) floats in the sky when you stand beside it
         const s = isVisible ? adjustedMarkerScale : 0;
-        if (s !== marker.currentScale) {
+        let raise = 3;
+        if (horizonFactor > 0 && isVisible) {
+            const cityTerrH = elevationEnabled ? Math.max(0,
+                (sampleElevationBestEffort(city.lat, city.lon,
+                    IMAGERY_ZOOM_MAX - ELEVATION_ZOOM_DELTA,
+                    IMAGERY_ZOOM_MIN - ELEVATION_ZOOM_DELTA) || 0)) / METERS_PER_SCENE_UNIT : 0;
+            raise = 3 * (1 - horizonFactor) + (cityTerrH + 0.5) * horizonFactor;
+            raise = Math.round(raise * 100) / 100;   // quantize: limit matrix churn
+        }
+        if (s !== marker.currentScale || raise !== marker.currentRaise) {
             marker.currentScale = s;
-            const p = marker.position;
+            marker.currentRaise = raise;
+            const p = _tv3.copy(marker.position).normalize().multiplyScalar(EARTH_RADIUS + raise);
             tmpMatrix.makeTranslation(p.x, p.y, p.z);
-            if (s !== 1) tmpMatrix.scale(_tv3.set(s, s, s));
+            if (s !== 1) tmpMatrix.scale(_tv2.set(s, s, s));
             cityInstancedMesh.setMatrixAt(marker.instanceIndex, tmpMatrix);
             instanceDirty = true;
         }
@@ -7482,7 +8491,7 @@ function updateLabelScales() {
         // Update 3D sprite label
         const labelSprite = marker.userData.labelSprite;
         if (labelSprite) {
-            const shouldShow = cityLabelsVisible && showLabel && isOnVisibleSide && horizonFade > 0.3;
+            const shouldShow = cityLabelsVisible && showLabel && isOnVisibleSide && horizonFade > 0.3 && !isViewTransitioning;
             labelSprite.visible = shouldShow;
 
             labelSprite.renderOrder = 200;
@@ -7493,26 +8502,35 @@ function updateLabelScales() {
                 const horizonFactor = Math.min(1, horizonBlendValue * 2);
 
                 const markerPos = marker.position;
-                const distToCamera = markerPos.distanceTo(cameraPos);
+                // NOTE: cameraPos is the NORMALIZED camera direction (for the
+                // visibility dot product) — distances must use camera.position
+                const distToCamera = markerPos.distanceTo(camera.position);
 
-                const horizonDist = Math.max(50, cameraPos.length() - EARTH_RADIUS) * 1.5;
-                const proximityFactor = inHorizonView ? Math.min(1, distToCamera / horizonDist) : 1;
-
-                const baseHeight = 30 + markerScale * 20;
-                const minSignpostHeight = 15;
-                const maxSignpostHeight = 100;
+                const baseHeight = (30 + markerScale * 20) * groundShrink;
+                // Horizon signposts grow aggressively with distance: the
+                // quadratic term cancels Earth-curvature drop (d²/2R) and the
+                // linear term adds ~1° of skyline clearance — far cities peek
+                // just above the horizon line, near ones stay at post height
+                const minSignpostHeight = 1.5;
                 const signpostHeight = inHorizonView
-                    ? minSignpostHeight + proximityFactor * (maxSignpostHeight - minSignpostHeight)
+                    ? Math.min(60, minSignpostHeight + distToCamera * 0.02 +
+                        (distToCamera * distToCamera) / (2 * EARTH_RADIUS))
                     : baseHeight;
-                const labelPos = _tv2.copy(markerPos).normalize().multiplyScalar(EARTH_RADIUS + signpostHeight);
+                const cityTerrainH = elevationEnabled ? Math.max(0,
+                    (sampleElevationBestEffort(city.lat, city.lon,
+                        IMAGERY_ZOOM_MAX - ELEVATION_ZOOM_DELTA,
+                        IMAGERY_ZOOM_MIN - ELEVATION_ZOOM_DELTA) || 0)) / METERS_PER_SCENE_UNIT : 0;
+                const labelPos = _tv2.copy(markerPos).normalize().multiplyScalar(EARTH_RADIUS + cityTerrainH + signpostHeight);
                 labelSprite.position.copy(labelPos);
 
+                // Screen-constant sizing (world scale proportional to true
+                // camera distance); clamps preserve the far-zoom look
                 const baseScale = labelSprite.userData.baseScale;
-                const distToCameraLabel = labelPos.distanceTo(cameraPos);
-                const orbitalScale = distToCameraLabel * 0.0004;
-                const minHorizonScale = 0.00008;
-                const maxHorizonScale = 0.00015;
-                const horizonScale = distToCameraLabel * (minHorizonScale + proximityFactor * (maxHorizonScale - minHorizonScale));
+                const distToCameraLabel = labelPos.distanceTo(camera.position);
+                const orbitalScale = distToCameraLabel * 0.0008;
+                // Flat angular size in horizon too — the old proximity blend
+                // shrank the nearest city's text, which read as a glitch
+                const horizonScale = distToCameraLabel * 0.0008;
                 const scaleMultiplier = orbitalScale * (1 - horizonFactor) + horizonScale * horizonFactor;
                 const maxLabelScale = inHorizonView ? 0.4 : 2;
                 const clampedScale = Math.min(scaleMultiplier, maxLabelScale);
@@ -7656,6 +8674,18 @@ function updateFocusHighlight(delta) {
 
         const inHorizonMode = horizonBlendValue > 0.5;
 
+        // Ground-anchored UI (cone, pointer compass, spot) was sized for the
+        // old ≥1000 km viewing range; shrink it and pull it down proportionally
+        // as the camera descends so it keeps constant apparent size and the
+        // camera never flies past it. Released as horizon mode takes over.
+        const uiAlt = camera.position.length() - EARTH_RADIUS;
+        const uiShrink = THREE.MathUtils.lerp(
+            THREE.MathUtils.clamp(uiAlt / POINTER_SHRINK_START_ALT, 0.05, 1),
+            1,
+            Math.min(1, horizonBlendValue * 2)
+        );
+        focusMarker.scale.setScalar(uiShrink);
+
         let markerPos;
         if (!focusLocked) {
             // UNPINNED mode: keep pointer directly below camera on Earth surface
@@ -7668,14 +8698,14 @@ function updateFocusHighlight(delta) {
             updateSliderForTimezone();
 
             // Position pointer above this point (static in unpinned mode)
-            const height = focusMarker.userData.baseHeight || 500;
+            const height = (focusMarker.userData.baseHeight || 500) * uiShrink;
             markerPos = _tv2.copy(normalized).multiplyScalar(EARTH_RADIUS + height);
         } else {
             // PINNED mode: position based on lat/lon with bounce
-            const height = inHorizonMode
+            const height = (inHorizonMode
                 ? focusMarker.userData.baseHeight + 300
-                : focusMarker.userData.baseHeight;
-            markerPos = latLonToCartesian(focusLat, focusLon, EARTH_RADIUS + height + bounce, _tv2);
+                : focusMarker.userData.baseHeight) * uiShrink;
+            markerPos = latLonToCartesian(focusLat, focusLon, EARTH_RADIUS + height + bounce * uiShrink, _tv2);
         }
         focusMarker.position.copy(markerPos);
 
@@ -7706,10 +8736,14 @@ function updateFocusHighlight(delta) {
         // Update target spot position on Earth's surface
         const { spotOutline, spotFill, compassGroup } = focusMarker.userData;
         if (spotOutline && spotFill) {
-            // Position on Earth's surface below the pointer
-            const spotPos = latLonToCartesian(focusPointLat, focusPointLon, EARTH_RADIUS + SPOT_POS_RAISE, _tv3);
+            // Position on Earth's surface below the pointer; the spot shrinks
+            // and settles with the approach so it stays a "dot", not a region
+            const spotRaise = Math.max(1.5, SPOT_POS_RAISE * uiShrink);
+            const spotPos = latLonToCartesian(focusPointLat, focusPointLon, EARTH_RADIUS + spotRaise, _tv3);
             spotOutline.position.copy(spotPos);
-            spotFill.position.copy(latLonToCartesian(focusPointLat, focusPointLon, EARTH_RADIUS + SPOT_POS_RAISE + 1, _tv4));
+            spotOutline.scale.setScalar(uiShrink);
+            spotFill.position.copy(latLonToCartesian(focusPointLat, focusPointLon, EARTH_RADIUS + spotRaise + 1, _tv4));
+            spotFill.scale.setScalar(uiShrink);
 
             // Orient to face outward from Earth
             spotOutline.lookAt(0, 0, 0);
@@ -7756,6 +8790,11 @@ function updateFocusHighlight(delta) {
 
             // Show compass in horizon view, hide regular spot
             const inHorizon = isViewTransitioning || horizonBlendValue > 0.3;
+            // Ground UI sits just above the imagery rings (riding the local
+            // terrain height); while the globe's fake displacement is still
+            // fading mid-transition, ride above it instead
+            const groundRaise = Math.max(GROUND_UI_RAISE, SPOT_POS_RAISE * (1 - horizonBlendValue)) + elevationCamLift;
+            const groundPos = latLonToCartesian(focusPointLat, focusPointLon, EARTH_RADIUS + groundRaise, _tv7);
             if (compassGroup) {
                 compassGroup.visible = inHorizon;
 
@@ -7764,7 +8803,7 @@ function updateFocusHighlight(delta) {
                 if (sunLineGroup) {
                     sunLineGroup.visible = inHorizon;
                     if (inHorizon) {
-                        sunLineGroup.position.copy(spotPos);
+                        sunLineGroup.position.copy(groundPos);
                         sunLineGroup.setRotationFromMatrix(compassMatrix);
                         sunLineGroup.rotateZ(-sunAzimuth);
                     }
@@ -7772,7 +8811,7 @@ function updateFocusHighlight(delta) {
                 if (moonLineGroup) {
                     moonLineGroup.visible = inHorizon;
                     if (inHorizon) {
-                        moonLineGroup.position.copy(spotPos);
+                        moonLineGroup.position.copy(groundPos);
                         moonLineGroup.setRotationFromMatrix(compassMatrix);
                         moonLineGroup.rotateZ(-moonAzimuth);
                     }
@@ -7795,7 +8834,7 @@ function updateFocusHighlight(delta) {
                 }
 
                 if (inHorizon) {
-                    compassGroup.position.copy(spotPos);
+                    compassGroup.position.copy(groundPos);
                     compassGroup.setRotationFromMatrix(compassMatrix);
                 }
 
@@ -8119,7 +9158,7 @@ function setCameraFromSpherical(lat, lon, radius) {
 
     // Blend radius between orbital (user-controlled) and horizon (fixed surface height)
     const easedBlend = blend * blend * (3 - 2 * blend);  // Smoothstep
-    const effectiveRadius = radius * (1 - easedBlend) + HORIZON_CAMERA_HEIGHT * easedBlend;
+    const effectiveRadius = radius * (1 - easedBlend) + (HORIZON_CAMERA_HEIGHT + elevationCamLift) * easedBlend;
 
     // Calculate camera position using the effective (possibly blended) radius
     const camPos = _tv1.set(
@@ -8257,9 +9296,10 @@ function setupOrbitControls() {
                 dragStartX = e.clientX;
                 dragStartY = e.clientY;
             } else {
-                // Orbital view mode - rotate camera around Earth
-                const zoomFactor = Math.max(0.3, Math.min(1, (cameraRadius - EARTH_RADIUS) / (ORBITAL_MAX_RADIUS - EARTH_RADIUS)));
-                const sensitivity = 0.05 + 0.15 * zoomFactor;
+                // Orbital view mode - rotate camera around Earth. Degrees per
+                // pixel scale with altitude so dragging feels like grabbing the
+                // ground at any zoom (the old 0.095°/px floor was ~10 km/px low)
+                const sensitivity = THREE.MathUtils.clamp((cameraRadius - EARTH_RADIUS) * 0.00001, 0.0015, 0.2);
                 dragOffsetLon = -deltaX * sensitivity;
                 dragOffsetLat = deltaY * sensitivity;
 
@@ -8389,7 +9429,6 @@ function setupOrbitControls() {
         e.preventDefault();
         if (isViewTransitioning) return;  // Block all zoom during cinematic transition
 
-        const zoomSpeed = 500;  // Scaled for larger Earth
         const wasAtMin = cameraRadius <= CAMERA_MIN_RADIUS + 10;
         const wasInHorizonMode = cameraRadius < TRANSITION_RADIUS;
         const zoomingIn = e.deltaY < 0;
@@ -8420,13 +9459,19 @@ function setupOrbitControls() {
             }
             camera.updateProjectionMatrix();
         } else {
-            // Orbital zoom - check if zooming in would cross threshold
-            if (zoomingIn && cameraRadius >= TRANSITION_RADIUS && cameraRadius - zoomSpeed < TRANSITION_RADIUS) {
-                // Would cross threshold - trigger cinematic fall instead
+            // Orbital zoom: proportional to altitude — each tick changes height
+            // above the surface by a fixed percentage, so steps are gentle near
+            // the planet and fast when far out (no flat-step jumps)
+            const ticks = THREE.MathUtils.clamp(Math.abs(e.deltaY) / 100, 0.2, 2);
+            const factor = Math.pow(ORBITAL_ZOOM_STEP, ticks);
+            const altitude = cameraRadius - EARTH_RADIUS;
+            const newRadius = EARTH_RADIUS + (zoomingIn ? altitude / factor : altitude * factor);
+            if (zoomingIn && cameraRadius >= TRANSITION_RADIUS && newRadius < TRANSITION_RADIUS) {
+                // Would cross the boundary - trigger cinematic fall instead
                 startViewTransition(1);
                 return;
             }
-            cameraRadius += zoomingIn ? -zoomSpeed : zoomSpeed;
+            cameraRadius = newRadius;
         }
         // Clamp orbital zoom to TRANSITION_RADIUS — below that requires cinematic transition
         if (!isHorizonMode) {
@@ -8661,9 +9706,9 @@ function setupOrbitControls() {
                 touchStartX = e.touches[0].clientX;
                 touchStartY = e.touches[0].clientY;
             } else {
-                // Orbital view mode - slower when zoomed in
-                const zoomFactor = Math.max(0.3, Math.min(1, (cameraRadius - EARTH_RADIUS) / (ORBITAL_MAX_RADIUS - EARTH_RADIUS)));
-                const sensitivity = 0.05 + 0.15 * zoomFactor;
+                // Orbital view mode - degrees per pixel scale with altitude
+                // (same grab-the-ground rule as the mouse drag)
+                const sensitivity = THREE.MathUtils.clamp((cameraRadius - EARTH_RADIUS) * 0.00001, 0.0015, 0.2);
                 dragOffsetLon = -deltaX * sensitivity;
                 dragOffsetLat = deltaY * sensitivity;
                 const totalLat = cameraRefLat + dragOffsetLat;
@@ -8679,15 +9724,13 @@ function setupOrbitControls() {
             const distance = Math.sqrt(dx * dx + dy * dy);
 
             if (lastTouchDistance > 0) {
-                const zoomSpeed = 20;  // Scaled for larger Earth
-                const delta = (lastTouchDistance - distance) * zoomSpeed;
-                const zoomingIn = delta < 0;
+                const zoomingIn = distance > lastTouchDistance;
                 const wasAtMin = cameraRadius <= CAMERA_MIN_RADIUS + 10;
                 const wasInHorizonMode = cameraRadius < TRANSITION_RADIUS;
 
                 // If already in horizon mode, control FOV instead of radius
                 if (wasAtMin && wasInHorizonMode) {
-                    const fovSpeed = Math.abs(delta) * 0.1;
+                    const fovSpeed = Math.abs(distance - lastTouchDistance) * 2;
                     if (zoomingIn) {
                         // Zoom in - decrease FOV and trigger look-up animation
                         const prevFov = camera.fov;
@@ -8711,13 +9754,16 @@ function setupOrbitControls() {
                     }
                     camera.updateProjectionMatrix();
                 } else {
-                    // Orbital zoom - check if zooming in would cross threshold
-                    if (zoomingIn && cameraRadius >= TRANSITION_RADIUS && cameraRadius + delta < TRANSITION_RADIUS) {
+                    // Orbital zoom: altitude scales with the pinch ratio, so
+                    // steps stay gentle near the planet
+                    const altitude = cameraRadius - EARTH_RADIUS;
+                    const newRadius = EARTH_RADIUS + altitude * (lastTouchDistance / Math.max(1, distance));
+                    if (zoomingIn && cameraRadius >= TRANSITION_RADIUS && newRadius < TRANSITION_RADIUS) {
                         startViewTransition(1);
                         lastTouchDistance = distance;
                         return;
                     }
-                    cameraRadius += delta;
+                    cameraRadius = newRadius;
                 }
                 if (!isHorizonMode) {
                     cameraRadius = THREE.MathUtils.clamp(cameraRadius, TRANSITION_RADIUS, ORBITAL_MAX_RADIUS);
@@ -8923,6 +9969,16 @@ function animate() {
     // Update simulation
     updateSimulation(now);
 
+    // One coalesced UI refresh per frame for time scrubbing: slider/wheel
+    // input events can outpace frames 2-3x, so their handlers only set this
+    // flag (updateSimulation clears it when it already refreshed this frame)
+    if (timeUiDirty) {
+        timeUiDirty = false;
+        updateTimeDisplay();
+        updatePositionDisplay();
+        updateEventMarkers();
+    }
+
     // Update moon position based on sim time
     updateMoonPosition();
 
@@ -9098,6 +10154,9 @@ function animate() {
 
     // Update celestial trail positions
     updateCelestialTrails();
+
+    // Update HD imagery rings (streams Sentinel-2 tiles, fades globe displacement in horizon mode)
+    updateImagery();
 
     // Update focus highlight position on sphere
     updateFocusHighlight(delta);

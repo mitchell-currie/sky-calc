@@ -3258,3 +3258,28 @@ canvas {
     to { opacity: 1; }
 }
 
+
+/* ==================== HD IMAGERY ATTRIBUTION ==================== */
+/* Required by EOX s2maps.eu terms; shown only while imagery tiles are on screen */
+#imagery-attribution {
+    position: fixed;
+    right: 6px;
+    bottom: 4px;
+    z-index: 50;
+    font-size: 10px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    opacity: 0.55;
+}
+
+#imagery-attribution.hidden {
+    display: none;
+}
+
+#imagery-attribution a {
+    color: #99a3b8;
+    text-decoration: none;
+}
+
+#imagery-attribution a:hover {
+    text-decoration: underline;
+}
