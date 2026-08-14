@@ -4,7 +4,7 @@
 
 An intuitive tool for understanding the movement of celestial bodies and tracking celestial events. Figure out exactly where to look in the sky for tonight's moonrise, plan a date night under the stars, or explore 800 years of eclipses. Drop into first-person horizon view from any location on Earth and see exactly what the sky looks like — past, present, or future.
 
-Built with Three.js and Swiss Ephemeris for sub-arcsecond accuracy. Real star catalogs, vector coastlines, 5 planets, and full eclipse visualization — all running in the browser with zero backend.
+Built with Three.js and Swiss Ephemeris for sub-arcsecond accuracy. Real star catalogs, vector coastlines, planets from Mercury to Pluto, meteor shower radiants, and full eclipse visualization — all running in the browser with zero backend.
 
 ![Three.js](https://img.shields.io/badge/Three.js-r128-black?logo=three.js)
 ![Vanilla JS](https://img.shields.io/badge/Vanilla%20JS-No%20Framework-f7df1e?logo=javascript)
@@ -43,7 +43,9 @@ Built with Three.js and Swiss Ephemeris for sub-arcsecond accuracy. Real star ca
 - **2,852 real stars** from the HYG v4.1 catalog with accurate color (B-V index) and magnitude
 - **30 constellations** with line data from Stellarium
 - **48 named stars** with labels
-- **5 naked-eye planets** (Mercury, Venus, Mars, Jupiter, Saturn) positioned via Swiss Ephemeris
+- **7 planets + Vesta, Ceres, Pluto** positioned via Swiss Ephemeris
+- **Meteor shower radiants** — 12 showers from the IMO calendar with radiant drift, precessing activity windows, and historical gating (the Geminids switch on in 1862; the Andromedids die with comet Biela in 1899)
+- **The Milky Way** — real Gaia DR2 imagery (NASA Deep Star Maps) accurately placed on the celestial sphere, dust lanes and Magellanic Clouds included
 
 ### Time Simulation
 - **Live mode** synced to real time, or **manual control** at 13 speed levels (1 second per minute up to 30 days per second)
@@ -89,9 +91,10 @@ Built with Three.js and Swiss Ephemeris for sub-arcsecond accuracy. Real star ca
 |------|--------|
 | Star positions & magnitudes | [HYG Star Database v4.1](https://github.com/astronexus/HYG-Database) |
 | Constellation lines | [Stellarium](https://stellarium.org/) |
-| Planetary ephemerides | [Swiss Ephemeris](https://www.astro.com/swisseph/) |
+| Planetary ephemerides | [Swiss Ephemeris](https://www.astro.com/swisseph/) — incl. self-hosted 1200-1799 data files (`se*_12.se1`, AGPL/dual-licensed by Astrodienst) |
 | Eclipse events (1600–2400) | [NASA Eclipse Website](https://eclipse.gsfc.nasa.gov/) |
 | Coastlines, lakes, rivers | [Natural Earth](https://www.naturalearthdata.com/) (public domain) |
 | Satellite imagery (globe + streamed tiles) | [Sentinel-2 cloudless](https://s2maps.eu) by [EOX IT Services GmbH](https://eox.at) — contains modified Copernicus Sentinel data, CC-BY-NC-SA, free for non-commercial use |
+| Milky Way | [NASA/GSFC Scientific Visualization Studio — Deep Star Maps 2020](https://svs.gsfc.nasa.gov/4851); Gaia DR2: ESA/Gaia/DPAC |
 | Terrain elevation | [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen terrarium, open data) |
 

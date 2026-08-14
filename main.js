@@ -2,7 +2,6 @@
 import SwissEph from 'https://cdn.jsdelivr.net/gh/prolaxu/swisseph-wasm@main/src/swisseph.js';
 import { CELESTIAL_EVENTS } from './eclipse-data.js';
 import { STAR_CATALOG, STAR_NAMES, CONSTELLATION_DATA } from './star-data.js';
-import { COASTLINE_10M, LAKES_10M, RIVERS_10M } from './coastline-data.js?v=3';
 
 let swe = null;
 let sweInitialized = false;
@@ -16,6 +15,28 @@ async function initSwissEph() {
     } catch (error) {
         console.error('Failed to initialize Swiss Ephemeris:', error);
     }
+}
+
+// The WASM bundle's data files (sepl/semo/seas_18.se1) cover 1800-2400 only.
+// Pre-1800, planets/moon silently fall back to the Moshier analytic theory
+// (~arcsec error) and asteroids THROW. Sideload the official 1200-1799 files
+// (astro.com originals, mirrored in this repo) into the WASM's virtual
+// filesystem: swe_calc picks them up on the next query — verified that a
+// late write recovers even after a failed query, no reinit needed. Gives
+// full JPL-derived precision for pre-1800 eclipses and makes Vesta/Ceres
+// exist across the whole 1600-2400 sim range.
+async function loadExtendedEphemeris() {
+    if (!sweInitialized) return;
+    await Promise.all(['sepl_12.se1', 'semo_12.se1', 'seas_12.se1'].map(async (name) => {
+        try {
+            const resp = await fetch(name);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const buf = await resp.arrayBuffer();
+            swe.SweModule.FS.writeFile('/sweph/' + name, new Uint8Array(buf));
+        } catch (e) {
+            console.warn(`Ephemeris sideload failed (${name}) — pre-1800 uses fallback/hidden bodies:`, e);
+        }
+    }));
 }
 
 // Constants
@@ -77,14 +98,88 @@ const PLANETS = [
     { id: 4, name: 'Mars',    color: [1.0, 0.4, 0.27],    size: 3.5 },
     { id: 5, name: 'Jupiter', color: [1.0, 0.87, 0.67],   size: 4.0 },
     { id: 6, name: 'Saturn',  color: [1.0, 0.93, 0.8],    size: 3.0 },
+    // Telescopic pair — sized well below the naked-eye five to reflect
+    // faintness (Uranus mag ~5.6 is at the naked-eye limit; Neptune ~7.8)
+    { id: 7, name: 'Uranus',  color: [0.62, 0.86, 0.9],   size: 2.2 },
+    { id: 8, name: 'Neptune', color: [0.42, 0.55, 1.0],   size: 2.0 },
+    // Dwarf planets + brightest asteroid (SE ids: Pluto 9, Ceres 17, Vesta 20).
+    // Vesta peaks mag ~5.1 (naked-eye at good oppositions), Ceres ~6.6, Pluto ~14.5
+    { id: 20, name: 'Vesta',  color: [0.85, 0.82, 0.72],  size: 2.0 },
+    { id: 17, name: 'Ceres',  color: [0.72, 0.71, 0.68],  size: 1.8 },
+    { id: 9,  name: 'Pluto',  color: [0.78, 0.66, 0.55],  size: 1.5 },
 ];
 let planetSprites = []; // { dot, label, planetId }
+
+// ==================== METEOR SHOWER RADIANTS ====================
+// Source: IMO 2026 Meteor Shower Calendar, Tables 5 & 6 (imo.net).
+// `samples` are [month, day, RA°, Dec°] radiant positions through the
+// activity window straight from Table 6 — linear interpolation between them
+// reproduces the IMO radiant drift; end segments extrapolate.
+// `first`/`last` gate showers that did not exist across the whole 1600-2400
+// sim span: the Geminid stream only reached Earth's orbit ~1862, the
+// Quadrantids appeared ~1825, the Ursids were first seen 1945, and the
+// Andromedids (comet Biela's debris, storms of 1872/1885) faded out by 1900.
+// null = active over the whole sim range (Perseids: records since 36 AD).
+const METEOR_SHOWERS = [
+    { name: 'Quadrantids', zhr: 80, parent: '2003 EH1', first: 1825, last: null,
+      start: [12, 28], peak: [1, 3], end: [1, 12],
+      samples: [[12, 30, 226, 50], [12, 31, 228, 50], [1, 5, 231, 49], [1, 10, 234, 48]] },
+    { name: 'Lyrids', zhr: 18, parent: 'C/1861 G1 (Thatcher)', first: null, last: null,
+      start: [4, 14], peak: [4, 22], end: [4, 30],
+      samples: [[4, 15, 263, 34], [4, 20, 269, 34], [4, 25, 274, 34], [4, 30, 279, 34]] },
+    { name: 'η-Aquariids', zhr: 50, parent: '1P/Halley', first: null, last: null,
+      start: [4, 19], peak: [5, 6], end: [5, 28],
+      samples: [[4, 20, 323, -7], [4, 25, 328, -5], [4, 30, 332, -3], [5, 5, 337, -1],
+                [5, 10, 341, 1], [5, 15, 345, 3], [5, 20, 349, 5], [5, 25, 353, 7]] },
+    { name: 'S. δ-Aquariids', zhr: 25, parent: '96P/Machholz complex', first: null, last: null,
+      start: [7, 12], peak: [7, 31], end: [8, 23],
+      samples: [[7, 15, 329, -19], [7, 20, 333, -18], [7, 25, 337, -17], [7, 30, 340, -16],
+                [8, 5, 345, -14], [8, 10, 349, -13], [8, 15, 352, -12], [8, 20, 356, -11]] },
+    { name: 'Perseids', zhr: 100, parent: '109P/Swift-Tuttle', first: null, last: null,
+      start: [7, 17], peak: [8, 13], end: [8, 24],
+      samples: [[7, 15, 6, 50], [7, 20, 11, 52], [7, 25, 22, 53], [7, 30, 29, 54],
+                [8, 5, 37, 56], [8, 10, 45, 57], [8, 15, 51, 58], [8, 20, 57, 58], [8, 25, 63, 58]] },
+    { name: 'Orionids', zhr: 20, parent: '1P/Halley', first: null, last: null,
+      start: [10, 2], peak: [10, 21], end: [11, 7],
+      samples: [[10, 5, 85, 14], [10, 10, 88, 15], [10, 15, 91, 15], [10, 20, 94, 16],
+                [10, 25, 98, 16], [10, 30, 101, 16], [11, 5, 105, 17]] },
+    { name: 'S. Taurids', zhr: 7, parent: '2P/Encke', first: null, last: null,
+      start: [9, 20], peak: [11, 5], end: [11, 20],
+      samples: [[9, 20, 18, 5], [9, 30, 25, 7], [10, 10, 32, 9], [10, 20, 40, 12],
+                [10, 30, 47, 14], [11, 5, 52, 15], [11, 10, 56, 15], [11, 20, 64, 16]] },
+    { name: 'N. Taurids', zhr: 5, parent: '2004 TG10 (Encke complex)', first: null, last: null,
+      start: [10, 20], peak: [11, 12], end: [12, 10],
+      samples: [[10, 20, 38, 18], [10, 25, 43, 19], [10, 30, 47, 20], [11, 5, 52, 21],
+                [11, 10, 56, 22], [11, 15, 61, 23], [11, 20, 65, 24], [11, 25, 70, 24], [11, 30, 74, 24]] },
+    { name: 'Leonids', zhr: 15, parent: '55P/Tempel-Tuttle', first: null, last: null,
+      start: [11, 6], peak: [11, 17], end: [11, 30],
+      samples: [[11, 10, 147, 24], [11, 15, 150, 23], [11, 20, 153, 21], [11, 25, 156, 20], [11, 30, 159, 19]] },
+    { name: 'Geminids', zhr: 150, parent: '3200 Phaethon', first: 1862, last: null,
+      start: [12, 4], peak: [12, 14], end: [12, 20],
+      samples: [[12, 5, 103, 33], [12, 10, 108, 33], [12, 15, 113, 33], [12, 20, 118, 32]] },
+    { name: 'Ursids', zhr: 10, parent: '8P/Tuttle', first: 1945, last: null,
+      start: [12, 17], peak: [12, 22], end: [12, 26],
+      samples: [[12, 20, 217, 76], [12, 25, 217, 74]] },
+    // Historical: born of comet 3D/Biela's breakup, produced meteor storms in
+    // 1872 and 1885, essentially dead by 1900. Radiant approximate (γ And).
+    { name: 'Andromedids', zhr: 20, parent: '3D/Biela', first: 1741, last: 1899,
+      start: [11, 15], peak: [11, 27], end: [12, 6],
+      samples: [[11, 15, 18, 42], [11, 27, 25, 44], [12, 6, 30, 45]] },
+];
+let meteorSprites = []; // { data, marker, label }
+let meteorShowersEnabled = true;
+
+// Milky Way band — NASA SVS Deep Star Maps 2020 on an inside-out sphere
+let milkyWayMesh = null;
+let milkyWayEnabled = true;
+const MILKY_WAY_OPACITY = 0.2; // additive gain — bake has true-black sky, so this scales only the band
 let sunLight;  // Directional light from sun
 let focusMarker;  // Marker at camera focus point
 let referenceCube;  // Debug cube at Earth center
 
 // Texture loading promise (resolved when Earth textures finish loading)
 let texturesReadyPromise = Promise.resolve();
+let coastlineReadyPromise = Promise.resolve();
 
 // View zoom button state
 let toggleViewZoomBtn = null;
@@ -2217,6 +2312,12 @@ function createEclipseCones() {
     });
     umbraCone = new THREE.Mesh(umbraGeometry, umbraMaterial);
     umbraCone.visible = true;
+    // The three cones are nested transparent volumes: three.js sorts
+    // transparent objects by object-center distance, so the draw order flips
+    // with camera angle and the penumbra's gray layers can composite OVER the
+    // faint black umbra, washing it out. Explicit renderOrder pins the
+    // composite: penumbra (1) → antumbra (2) → umbra (3, darkest, on top).
+    umbraCone.renderOrder = 3;
     scene.add(umbraCone);
 
     // Penumbra cone - light gray shadow, apex toward Sun
@@ -2230,6 +2331,7 @@ function createEclipseCones() {
     });
     penumbraCone = new THREE.Mesh(penumbraGeometry, penumbraMaterial);
     penumbraCone.visible = true;
+    penumbraCone.renderOrder = 1;
     scene.add(penumbraCone);
 
     // Antumbra cone - red shadow, extends from umbra apex toward Earth
@@ -2243,6 +2345,7 @@ function createEclipseCones() {
     });
     antumbraCone = new THREE.Mesh(antumbraGeometry, antumbraMaterial);
     antumbraCone.visible = false;  // Only visible for annular eclipses
+    antumbraCone.renderOrder = 2;
     scene.add(antumbraCone);
 
 }
@@ -4254,7 +4357,7 @@ function setupLeftControls() {
     const pillToggleActions = {
         'imagery': {
             get: () => imageryEnabled,
-            set: (v) => { imageryEnabled = v; }  // updateImagery handles visibility + displacement
+            set: (v) => { imageryEnabled = v; }  // updateImagery handles visibility + line fade
         },
         'elevation': {
             get: () => elevationEnabled,
@@ -4309,6 +4412,20 @@ function setupLeftControls() {
             get: () => planetLabelsEnabled,
             set: (v) => { planetLabelsEnabled = v; }
         },
+        'meteor-showers': {
+            get: () => meteorShowersEnabled,
+            set: (v) => {
+                meteorShowersEnabled = v;
+                updateMeteorRadiants(true);
+            }
+        },
+        'milky-way': {
+            get: () => milkyWayEnabled,
+            set: (v) => {
+                milkyWayEnabled = v;
+                if (milkyWayMesh) milkyWayMesh.visible = v;
+            }
+        },
         'ghost-view': {
             get: () => ghostViewEnabled,
             set: (v) => {
@@ -4344,7 +4461,7 @@ function setupLeftControls() {
             earthBtn.classList.toggle('active', anyEarthOn);
         }
         if (skyBtn) {
-            const anySkyOn = constellationLinesVisible || starLabelsEnabled || planetLabelsEnabled || ghostViewEnabled || celestialTrailsEnabled;
+            const anySkyOn = constellationLinesVisible || starLabelsEnabled || planetLabelsEnabled || meteorShowersEnabled || milkyWayEnabled || ghostViewEnabled || celestialTrailsEnabled;
             skyBtn.classList.toggle('active', anySkyOn);
         }
     }
@@ -5250,9 +5367,17 @@ function getPlanetRADec(date, planetId) {
     if (!sweInitialized || !swe) return null;
     const jd = dateToJulianDay(date);
     const flags = swe.SEFLG_SWIEPH | 2048; // SEFLG_EQUATORIAL
-    const result = swe.calc_ut(jd, planetId, flags);
-    // result[0] = RA in degrees, result[1] = Dec in degrees
-    return { ra: result[0], dec: result[1] };
+    try {
+        const result = swe.calc_ut(jd, planetId, flags);
+        // result[0] = RA in degrees, result[1] = Dec in degrees
+        if (!result || !isFinite(result[0])) return null;
+        return { ra: result[0], dec: result[1] };
+    } catch (e) {
+        // Asteroids have no analytic fallback: outside their .se1 file
+        // coverage calc_ut THROWS (planets/moon silently switch to Moshier).
+        // Callers treat null as "hide this body".
+        return null;
+    }
 }
 
 function getSunPosition(date) {
@@ -5602,6 +5727,7 @@ function throttledUrlUpdate(now) {
 async function init() {
     // Initialize Swiss Ephemeris for accurate astronomical calculations
     await initSwissEph();
+    loadExtendedEphemeris(); // not awaited — 1200-1799 data files stream in behind boot
 
     // Get user location
     const location = await getUserLocation();
@@ -5779,13 +5905,16 @@ async function init() {
     // Start animation loop
     animate();
 
-    // Hide loading overlay once textures are ready and min display time elapsed
-    await texturesReadyPromise;
+    // Hide loading overlay once textures + coastline meshes are ready and min
+    // display time elapsed (both promises resolve on failure too)
+    await Promise.all([texturesReadyPromise, coastlineReadyPromise]);
     await hideLoadingOverlay();
 }
 
 function createEarth() {
-    const earthGeometry = new THREE.SphereGeometry(EARTH_RADIUS, 256, 256);
+    // 128 segments: limb chord error is sub-pixel at any zoom. The old 256
+    // tessellation existed solely for the (removed) displacement map.
+    const earthGeometry = new THREE.SphereGeometry(EARTH_RADIUS, 128, 128);
 
     // Create material with eclipse darkening via onBeforeCompile
     earthMaterial = new THREE.MeshStandardMaterial({
@@ -5947,8 +6076,12 @@ function createEarth() {
 
     const earthSphere = new THREE.Mesh(earthGeometry, earthMaterial);
     earthSphere.rotation.x = Math.PI / 2;  // Fix for +Z up coordinate system
-    earthSphere.castShadow = true;
-    earthSphere.receiveShadow = true;
+    // No shadow participation: the dedicated 64-seg caster handles the lunar
+    // eclipse shadow, and nothing casts onto Earth (its own night side comes
+    // from the terminator gate in the shader) — receiveShadow would pay
+    // fullscreen PCF taps for an invisible effect
+    earthSphere.castShadow = false;
+    earthSphere.receiveShadow = false;
     scene.add(earthSphere);
 
     // Load Earth surface texture
@@ -5974,20 +6107,11 @@ function createEarth() {
         });
     });
 
-    // Load elevation/displacement map
-    const elevTexturePromise = new Promise((resolve) => {
-        loader.load('earth-elevation.jpg', (texture) => {
-            earthMaterial.displacementMap = texture;
-            earthMaterial.displacementScale = 5;  // Exaggerated for visibility (real would be ~8 units)
-            earthMaterial.needsUpdate = true;
-            resolve();
-        }, undefined, (err) => {
-            console.error('Failed to load elevation map:', err);
-            resolve(); // resolve anyway so overlay still hides
-        });
-    });
+    // No displacement map on the globe: the fake exaggerated relief was
+    // invisible above 600 km and melted out below it anyway (real terrain
+    // arrives with the imagery rings) — removed, saving a 27 MB download
 
-    texturesReadyPromise = Promise.all([earthTexturePromise, elevTexturePromise]);
+    texturesReadyPromise = earthTexturePromise;
 
     // Create shadow-casting sphere for Earth (for solar/lunar eclipses)
     // Uses a fully transparent material but still casts shadows
@@ -5995,7 +6119,8 @@ function createEarth() {
     const shadowMaterial = new THREE.MeshBasicMaterial({
         transparent: true,
         opacity: 0,
-        depthWrite: false
+        depthWrite: false,
+        colorWrite: false   // shadow-pass only — without this it rasterizes a fullscreen no-op blend every frame
     });
     const earthShadowCaster = new THREE.Mesh(shadowGeometry, shadowMaterial);
     earthShadowCaster.castShadow = true;    // Casts shadow onto Moon (lunar eclipse)
@@ -6112,15 +6237,29 @@ function buildCoastlineMesh(coastlineData, radius, color, opacity) {
 }
 
 function createCoastlines() {
-    const GEO_RADIUS = EARTH_RADIUS; // Barely above surface — back-face shader handles visibility
+    // Dynamic import: 21 MB of vector data — as a STATIC import it blocked
+    // all of main.js from executing, so nothing else (texture, WASM) could
+    // even start downloading. Deferred, it downloads in parallel with the
+    // Earth texture; the loading overlay awaits coastlineReadyPromise too,
+    // so the heavy module parse + mesh build land behind the overlay instead
+    // of freezing the tab mid-session. Consumers stay null-guarded anyway.
+    const build = ({ COASTLINE_10M, LAKES_10M, RIVERS_10M }) => {
+        const GEO_RADIUS = EARTH_RADIUS; // Barely above surface — back-face shader handles visibility
 
-    coastlineMesh = buildCoastlineMesh(COASTLINE_10M, GEO_RADIUS, 0x7a8590, 0.4);
-    lakesMesh = buildCoastlineMesh(LAKES_10M, GEO_RADIUS, 0x7a8590, 0.3);
-    riversMesh = buildCoastlineMesh(RIVERS_10M, GEO_RADIUS, 0x7a8590, 0.2);
+        coastlineMesh = buildCoastlineMesh(COASTLINE_10M, GEO_RADIUS, 0x7a8590, 0.4);
+        lakesMesh = buildCoastlineMesh(LAKES_10M, GEO_RADIUS, 0x7a8590, 0.3);
+        riversMesh = buildCoastlineMesh(RIVERS_10M, GEO_RADIUS, 0x7a8590, 0.2);
 
-    scene.add(coastlineMesh);
-    scene.add(lakesMesh);
-    scene.add(riversMesh);
+        scene.add(coastlineMesh);
+        scene.add(lakesMesh);
+        scene.add(riversMesh);
+    };
+    // Retry once with a fresh specifier — engines may cache a FAILED module
+    // URL for the session, so re-importing the same one can't recover.
+    // Never rejects: a dead network must not hold the loading overlay open.
+    coastlineReadyPromise = import('./coastline-data.js?v=3').then(build)
+        .catch(() => import('./coastline-data.js?v=3&retry=1').then(build))
+        .catch(err => console.error('Coastline data failed to load (lines unavailable):', err));
 }
 
 // ==================== HD IMAGERY (horizon mode) ====================
@@ -6140,7 +6279,7 @@ const IMAGERY_URL = (z, y, x) =>
 const IMAGERY_ZOOM_MAX = 14;       // innermost ring (~10 m/px — native Sentinel-2 resolution)
 const IMAGERY_ZOOM_MIN = 6;        // outermost ring (~±1000 km: covers the view in low-orbital preview)
 const IMAGERY_ORBITAL_SHOW = EARTH_RADIUS + 600 * KM_TO_SCENE;   // rings visible in orbital below 600 km altitude
-const IMAGERY_ORBITAL_FADE = EARTH_RADIUS + 1200 * KM_TO_SCENE;  // fake displacement melts between 1200 and 600 km on approach
+const IMAGERY_ORBITAL_FADE = EARTH_RADIUS + 1200 * KM_TO_SCENE;  // vector lines dissolve between 1200 and 600 km on approach
 const IMAGERY_ORBITAL_MAX_ZOOM = 11;  // ceiling of the altitude-matched display cap in orbital preview
 const IMAGERY_RING_TILES = 4;      // tiles per ring side (4x4)
 const IMAGERY_SUBDIV = 8;          // mesh cells per tile side (follows sphere curvature)
@@ -6832,9 +6971,9 @@ function prefetchImageryTiles(lat, lon) {
 }
 
 /**
- * Per-frame imagery management: fades the globe's fake displacement out under
- * the (flat) rings, shows/hides the rings with view mode, recenters the stack
- * when the focus point moves, and batches canvas->GPU uploads once per frame.
+ * Per-frame imagery management: dissolves the vector lines under the rings,
+ * shows/hides the rings with view mode, recenters the stack when the focus
+ * point moves, and batches canvas->GPU uploads once per frame.
  */
 function updateImagery() {
     // Ground-detail blend: 1 in horizon mode, and also ramps in as the orbital
@@ -6844,14 +6983,7 @@ function updateImagery() {
     const groundBlend = Math.max(horizonBlendValue, orbitalGround);
     const active = imageryEnabled && (horizonBlendValue > 0.05 || cameraRadius < IMAGERY_ORBITAL_SHOW);
 
-    // Fake displacement melts away BEFORE the rings appear (they carry real
-    // elevation; the phony 5-unit bumps would poke through them) — and it also
-    // keeps the low horizon camera from ending up inside the bumps
-    if (earthMaterial) {
-        earthMaterial.displacementScale = 5 * (1 - groundBlend);
-    }
-
-    // Coastline/lake/river lines dissolve on the same ramp: Natural Earth 10m
+    // Coastline/lake/river lines dissolve on this ramp: Natural Earth 10m
     // is generalized ~1 km cartography — crisp against the 2.5 km/px globe,
     // visibly misaligned against 10-75 m/px ring imagery (the imagery IS the
     // coastline there). With imagery off they stay, even in horizon view.
@@ -7611,6 +7743,17 @@ function bvToRGB(bv) {
 /**
  * Create a text label sprite for a planet name (colored)
  */
+/**
+ * Shared placement for all celestial-sphere text labels (stars, planets,
+ * meteor radiants): pushed outward along the radius and sideways so the
+ * text clears its marker. Single source for the offset constants.
+ */
+function positionSkyLabel(sprite, position) {
+    _tv1.copy(position).normalize().multiplyScalar(STAR_DISTANCE * 0.015);
+    _tv2.set(-position.y, position.x, 0).normalize().multiplyScalar(STAR_DISTANCE * 0.025);
+    sprite.position.copy(position).add(_tv1).add(_tv2);
+}
+
 function createPlanetLabel(name, position, color) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -7631,9 +7774,7 @@ function createPlanetLabel(name, position, color) {
         blending: THREE.AdditiveBlending
     });
     const sprite = new THREE.Sprite(material);
-    const outward = position.clone().normalize().multiplyScalar(STAR_DISTANCE * 0.015);
-    const sideways = new THREE.Vector3(-position.y, position.x, 0).normalize().multiplyScalar(STAR_DISTANCE * 0.025);
-    sprite.position.copy(position).add(outward).add(sideways);
+    positionSkyLabel(sprite, position);
     sprite.scale.set(STAR_DISTANCE * 0.12, STAR_DISTANCE * 0.03, 1);
     sprite.visible = false;
     return sprite;
@@ -7661,10 +7802,7 @@ function createStarLabel(name, position) {
         blending: THREE.AdditiveBlending
     });
     const sprite = new THREE.Sprite(material);
-    // Offset label from star position — push outward and sideways
-    const outward = position.clone().normalize().multiplyScalar(STAR_DISTANCE * 0.015);
-    const sideways = new THREE.Vector3(-position.y, position.x, 0).normalize().multiplyScalar(STAR_DISTANCE * 0.025);
-    sprite.position.copy(position).add(outward).add(sideways);
+    positionSkyLabel(sprite, position);
     sprite.scale.set(STAR_DISTANCE * 0.12, STAR_DISTANCE * 0.03, 1);
     sprite.visible = false; // Hidden until horizon mode
     return sprite;
@@ -7834,6 +7972,7 @@ function createCelestialBodies() {
         dot.position.copy(pos);
         const dotScale = STAR_DISTANCE * 0.006 * (planet.size / 3.0);
         dot.scale.set(dotScale, dotScale, 1);
+        dot.visible = !!raDec; // outside ephemeris coverage — update loop re-shows when data exists
         celestialSphereGroup.add(dot);
 
         // Label
@@ -7843,8 +7982,189 @@ function createCelestialBodies() {
         planetSprites.push({ dot, label, planetId: planet.id });
     }
 
+    // Meteor shower radiant markers
+    createMeteorRadiants();
+
+    // Milky Way band (async texture — pops in shortly after boot)
+    createMilkyWay();
+
     // Initial position update
     updateCelestialPositions();
+}
+
+/**
+ * Milky Way: NASA SVS "Deep Star Maps 2020" (Gaia DR2 photometry, public
+ * domain; credit NASA/GSFC SVS + ESA/Gaia/DPAC) on an inside-viewed sphere
+ * just beyond the stars. The JPEG is pre-baked into this app's exact sphere
+ * convention (u = RA/360 + 0.5): the SVS source is inside-view mirrored, so
+ * the bake flips it — runtime needs no UV offsets. Verified against 7 sky
+ * anchors (galactic center, LMC, SMC, Coalsack, Cygnus, Orion belt, M31).
+ * Additive blending: black adds nothing, band adds light; Earth still
+ * occludes it via depth test, so it sets below the horizon like the stars.
+ */
+function createMilkyWay() {
+    new THREE.TextureLoader().load('milky-way.jpg?v=2', (texture) => {
+        texture.anisotropy = 4;
+        const geometry = new THREE.SphereGeometry(STAR_DISTANCE * 1.04, 64, 32);
+        const material = new THREE.MeshBasicMaterial({
+            map: texture,
+            side: THREE.BackSide,
+            transparent: true,
+            opacity: MILKY_WAY_OPACITY,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        milkyWayMesh = new THREE.Mesh(geometry, material);
+        milkyWayMesh.rotation.x = Math.PI / 2; // equirect UVs -> Z-up, same as Earth sphere
+        milkyWayMesh.visible = milkyWayEnabled;
+        celestialSphereGroup.add(milkyWayMesh);
+    }, undefined, (err) => console.warn('Milky Way texture failed to load:', err));
+}
+
+// ==================== METEOR RADIANT RENDERING ====================
+// Activity windows are anchored where Earth crosses each debris stream — a
+// point fixed in inertial space — so their calendar dates arrive ~1 day later
+// every 70.5 years as the equinox precesses (Perseids 1600: ~Aug 7; 2400:
+// ~Aug 18). That first-order shift is modeled; per-stream node regression
+// beyond it is not. Radiant RA/Dec stay J2000, consistent with the star
+// catalog (the app's sky does not precess, and radiants ride their
+// constellations).
+const METEOR_PRECESS_DAYS_PER_YEAR = 0.01417; // 50.3″/yr ÷ 0.9856°/day
+const METEOR_EPOCH_YEAR = 2026; // the IMO calendar year the dates are exact for
+const HALF_YEAR_MS = 182.6 * 86400000;
+
+function createMeteorRadiants() {
+    meteorSprites = [];
+
+    // Shared radiant glyph: rays diverging from an open center — the point
+    // the meteors stream away from
+    const glyphCanvas = document.createElement('canvas');
+    glyphCanvas.width = 64;
+    glyphCanvas.height = 64;
+    const g = glyphCanvas.getContext('2d');
+    g.strokeStyle = 'rgba(150, 255, 190, 1)';
+    g.lineWidth = 2.5;
+    g.lineCap = 'round';
+    for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+        g.beginPath();
+        g.moveTo(32 + Math.cos(a) * 11, 32 + Math.sin(a) * 11);
+        g.lineTo(32 + Math.cos(a) * 26, 32 + Math.sin(a) * 26);
+        g.stroke();
+    }
+    g.beginPath();
+    g.arc(32, 32, 4.5, 0, Math.PI * 2);
+    g.stroke();
+    const glyphTexture = new THREE.CanvasTexture(glyphCanvas);
+    glyphTexture.minFilter = THREE.LinearFilter; // small on screen — mips just blur it
+
+    for (const s of METEOR_SHOWERS) {
+        // Precompute window edges and drift track as day-offsets from peak,
+        // in exact calendar time — a date on the far side of New Year picks
+        // the adjacent year's occurrence, so no mean-year wrap error
+        const peakMs = Date.UTC(METEOR_EPOCH_YEAR, s.peak[0] - 1, s.peak[1]);
+        const offsetOf = (m, d) => {
+            let ms = Date.UTC(METEOR_EPOCH_YEAR, m - 1, d);
+            if (ms - peakMs > HALF_YEAR_MS) ms = Date.UTC(METEOR_EPOCH_YEAR - 1, m - 1, d);
+            else if (peakMs - ms > HALF_YEAR_MS) ms = Date.UTC(METEOR_EPOCH_YEAR + 1, m - 1, d);
+            return (ms - peakMs) / 86400000;
+        };
+        s.startOff = offsetOf(s.start[0], s.start[1]);
+        s.endOff = offsetOf(s.end[0], s.end[1]);
+        let prevRa = null;
+        s.track = s.samples.map(([m, d, ra, dec]) => {
+            // Unwrap RA so interpolation never crosses the 0/360 seam
+            if (prevRa !== null) {
+                while (ra - prevRa > 180) ra -= 360;
+                while (ra - prevRa < -180) ra += 360;
+            }
+            prevRa = ra;
+            return { d: offsetOf(m, d), ra, dec };
+        });
+        // A one-sample track must stay safe to interpolate (a future minor
+        // shower may have a single published radiant position): duplicate it —
+        // the a.d === b.d branch then holds the radiant fixed, which is the
+        // right meaning for "no drift data"
+        if (s.track.length === 1) s.track.push({ ...s.track[0] });
+
+        const material = new THREE.SpriteMaterial({
+            map: glyphTexture,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+        const marker = new THREE.Sprite(material);
+        marker.visible = false;
+        celestialSphereGroup.add(marker);
+
+        const label = createPlanetLabel(s.name, new THREE.Vector3(STAR_DISTANCE, 0, 0), [0.59, 1.0, 0.75]);
+        celestialSphereGroup.add(label);
+
+        meteorSprites.push({ data: s, marker, label });
+    }
+    updateMeteorRadiants(true);
+}
+
+let lastMeteorUpdateTime = 0;
+
+function updateMeteorRadiants(force) {
+    const now = performance.now();
+    if (!force && now - lastMeteorUpdateTime < 200) return; // Throttle to 5 Hz like planets
+    lastMeteorUpdateTime = now;
+
+    const simTime = getAbsoluteSimulatedTime();
+    const nowMs = simTime.getTime();
+    const year = simTime.getUTCFullYear();
+
+    for (const entry of meteorSprites) {
+        const s = entry.data;
+        // Days from the NEAREST apparition's peak: candidate peaks in the
+        // adjacent calendar years, each arriving later by the precession
+        // shift relative to the 2026-epoch dates. Exact calendar arithmetic —
+        // continuous across New Year, leap years included.
+        let dp = Infinity;
+        for (let dy = -1; dy <= 1; dy++) {
+            const py = year + dy;
+            const peakMs = Date.UTC(py, s.peak[0] - 1, s.peak[1]) +
+                (py - METEOR_EPOCH_YEAR) * METEOR_PRECESS_DAYS_PER_YEAR * 86400000;
+            const d = (nowMs - peakMs) / 86400000;
+            if (Math.abs(d) < Math.abs(dp)) dp = d;
+        }
+        let active = meteorShowersEnabled && dp >= s.startOff && dp <= s.endOff;
+        if (active && (s.first || s.last)) {
+            // Gate by the apparition's LABEL year — the year its window ends
+            // in. Straddling showers are named for their January: "Quadrantids
+            // first seen 1825" must include the Dec 1824 nights of that same
+            // apparition, and exclude all of Dec 1823–Jan 1824.
+            const apparitionYear = new Date(nowMs + (s.endOff - dp) * 86400000).getUTCFullYear();
+            active = (!s.first || apparitionYear >= s.first) && (!s.last || apparitionYear <= s.last);
+        }
+        // Single visibility owner: marker here; the animate label loop
+        // derives label visibility from marker.visible + the horizon gate
+        entry.marker.visible = active;
+        if (!active) continue;
+
+        // Radiant position: interpolate the IMO drift track (end segments
+        // extrapolate to cover the full window)
+        const t = s.track;
+        let i = 0;
+        while (i < t.length - 2 && dp > t[i + 1].d) i++;
+        const a = t[i], b = t[i + 1];
+        const f = (b.d === a.d) ? 0 : (dp - a.d) / (b.d - a.d);
+        const ra = ((a.ra + (b.ra - a.ra) * f) % 360 + 360) % 360;
+        const dec = a.dec + (b.dec - a.dec) * f;
+        raDecToPosition(ra / 15, dec, STAR_DISTANCE, _tv3);
+        entry.marker.position.copy(_tv3);
+
+        // Emphasis toward maximum: 0 at window edges → 1 at peak
+        const fade = dp < 0 ? 1 - dp / s.startOff : 1 - dp / s.endOff;
+        const sc = STAR_DISTANCE * 0.005 * (0.75 + 0.5 * fade);
+        entry.marker.scale.set(sc, sc, 1);
+        entry.marker.material.opacity = 0.35 + 0.65 * fade;
+        entry.label.material.opacity = 0.45 + 0.55 * fade;
+
+        positionSkyLabel(entry.label, _tv3);
+    }
 }
 
 /**
@@ -7907,13 +8227,13 @@ function updatePlanetPositions() {
     const simTime = getAbsoluteSimulatedTime();
     for (const entry of planetSprites) {
         const raDec = getPlanetRADec(simTime, entry.planetId);
+        // Hide bodies outside their ephemeris coverage (the animate label
+        // loop follows dot.visible, so the label hides with it)
+        entry.dot.visible = !!raDec;
         if (!raDec) continue;
         raDecToPosition(raDec.ra / 15, raDec.dec, STAR_DISTANCE, _tv3);
         entry.dot.position.copy(_tv3);
-        // Update label position with same offset as createStarLabel
-        _tv1.copy(_tv3).normalize().multiplyScalar(STAR_DISTANCE * 0.015);
-        _tv2.set(-_tv3.y, _tv3.x, 0).normalize().multiplyScalar(STAR_DISTANCE * 0.025);
-        entry.label.position.copy(_tv3).add(_tv1).add(_tv2);
+        positionSkyLabel(entry.label, _tv3);
     }
 }
 
@@ -8791,8 +9111,8 @@ function updateFocusHighlight(delta) {
             // Show compass in horizon view, hide regular spot
             const inHorizon = isViewTransitioning || horizonBlendValue > 0.3;
             // Ground UI sits just above the imagery rings (riding the local
-            // terrain height); while the globe's fake displacement is still
-            // fading mid-transition, ride above it instead
+            // terrain height); mid-transition it eases down from the orbital
+            // spot height
             const groundRaise = Math.max(GROUND_UI_RAISE, SPOT_POS_RAISE * (1 - horizonBlendValue)) + elevationCamLift;
             const groundPos = latLonToCartesian(focusPointLat, focusPointLon, EARTH_RADIUS + groundRaise, _tv7);
             if (compassGroup) {
@@ -9963,7 +10283,11 @@ function animate() {
     const now = performance.now();
     const elapsed = now - lastTime;
     if (elapsed < FRAME_INTERVAL) return; // Skip frame if too soon
-    const delta = elapsed / 1000;  // Convert to seconds
+    // Clamp: after a main-thread stall (GC, 21MB coastline module landing)
+    // elapsed can be 300ms-1s, and one oversized step makes ease-toward-target
+    // consumers (zoom-align) overshoot instead of converge. Sim TIME is exact
+    // regardless — it flows from wall-clock timestamps, not delta.
+    const delta = Math.min(elapsed / 1000, 0.1);
     lastTime = now - (elapsed % FRAME_INTERVAL); // Preserve remainder for smooth timing
 
     // Update simulation
@@ -10132,6 +10456,9 @@ function animate() {
     // Update planet positions on celestial sphere
     updatePlanetPositions();
 
+    // Update meteor shower radiant markers (activity windows + drift)
+    updateMeteorRadiants();
+
     // Rotate celestial sphere by GMST (Earth's sidereal rotation)
     if (celestialSphereGroup) {
         const gmstDeg = getGMST(dateToJulianDay(getAbsoluteSimulatedTime()));
@@ -10145,7 +10472,11 @@ function animate() {
             starLabelSprites[i].visible = showStarLabels;
         }
         for (let i = 0; i < planetSprites.length; i++) {
-            planetSprites[i].label.visible = showPlanetLabels;
+            planetSprites[i].label.visible = showPlanetLabels && planetSprites[i].dot.visible;
+        }
+        const showMeteorLabels = meteorShowersEnabled && inHorizon;
+        for (let i = 0; i < meteorSprites.length; i++) {
+            meteorSprites[i].label.visible = showMeteorLabels && meteorSprites[i].marker.visible;
         }
     }
 
@@ -10155,7 +10486,7 @@ function animate() {
     // Update celestial trail positions
     updateCelestialTrails();
 
-    // Update HD imagery rings (streams Sentinel-2 tiles, fades globe displacement in horizon mode)
+    // Update HD imagery rings (streams Sentinel-2 tiles, dissolves vector lines under them)
     updateImagery();
 
     // Update focus highlight position on sphere
@@ -10173,7 +10504,9 @@ function animate() {
     // Update URL hash for shareable links
     throttledUrlUpdate(now);
 
+    const _renderT0 = performance.now();
     renderer.render(scene, camera);
+    const _renderT1 = performance.now();
 
     // Performance overlay — toggled with P key
     if (!window._pm) {
@@ -10184,6 +10517,21 @@ function animate() {
         el.lastElementChild.style.cssText = 'margin-top:4px;white-space:pre';
         document.body.appendChild(el);
         const ctx = el.firstElementChild.getContext('2d');
+        // Which GPU did the browser actually give us? (dual-GPU laptops can
+        // silently land WebGL on the iGPU, or SwiftShader if accel is off)
+        let gpuName = '?';
+        try {
+            const gl = renderer.getContext();
+            const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+            gpuName = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+        } catch (e) { /* ignore */ }
+        console.log('[perf] GPU:', gpuName);
+        // getParameter can legitimately return null (lost context, privacy
+        // extensions) — a throw here would re-run this init block every frame
+        const gpuShort = String(gpuName || '?').replace(/^ANGLE \((.*)\)$/, '$1')
+            .replace(/\s*\(0x[0-9A-Fa-f]+\)/, '')
+            .replace(/\s*(Direct3D|D3D)\d+.*$/i, '').slice(0, 52);
+        const buildMatch = (document.querySelector('script[src*="main.js"]') || {src: ''}).src.match(/v=(\d+)/);
         window._pm = {
             el, ctx,
             visible: false,
@@ -10191,6 +10539,10 @@ function animate() {
             lastUpdate: performance.now(),
             times: [],        // rolling frame times
             fpsHistory: [],   // last 120 FPS samples for graph
+            simMs: 0,         // EMA: JS time before render (sim + updates)
+            glMs: 0,          // EMA: renderer.render() call (JS + GPU backpressure)
+            gpuShort,
+            build: buildMatch ? buildMatch[1] : '?',
         };
         document.addEventListener('keydown', (e) => {
             if (e.key === 'p' || e.key === 'P') {
@@ -10204,6 +10556,8 @@ function animate() {
     pm.times.push(frameNow - pm.lastFrame);
     pm.lastFrame = frameNow;
     if (pm.times.length > 300) pm.times.shift();
+    pm.simMs = pm.simMs * 0.9 + (_renderT0 - now) * 0.1;
+    pm.glMs = pm.glMs * 0.9 + (_renderT1 - _renderT0) * 0.1;
 
     if (pm.visible && frameNow - pm.lastUpdate > 250) {
         pm.lastUpdate = frameNow;
@@ -10263,7 +10617,10 @@ function animate() {
             `  <span style="color:#999">${avg.toFixed(1)}ms</span>` +
             `  <span style="color:#666">1%</span> <span style="color:#999">${p1.toFixed(0)}ms</span>` +
             `  <span style="color:#666">99%</span> <span style="color:#999">${p99.toFixed(0)}ms</span>\n` +
-            `<span style="color:#888">draw ${r.calls}  tri ${(r.triangles/1000).toFixed(0)}K  geo ${mem.geometries}  tex ${mem.textures}  heap ${heap}MB</span>`;
+            `<span style="color:#888">draw ${r.calls}  tri ${(r.triangles/1000).toFixed(0)}K  geo ${mem.geometries}  tex ${mem.textures}  heap ${heap}MB</span>\n` +
+            `<span style="color:#888">js ${pm.simMs.toFixed(1)}ms  gl ${pm.glMs.toFixed(1)}ms  ` +
+            `${renderer.getContext().drawingBufferWidth}×${renderer.getContext().drawingBufferHeight}  v${pm.build}</span>\n` +
+            `<span style="color:#568">${pm.gpuShort}</span>`;
     }
 }
 
